@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 每天从 Mac 增量拉取 agent 会话到 ThinkPad ~/mac_agent_sync/（只增不删）。
+# 来源：Claude Code ~/.claude、Codex ~/.codex/{sessions,archived_sessions}、DSH ~/.dsh/sessions、Grok ~/.grok/sessions（只收 updates.jsonl）、ZCode 命令行会话库
+# 每个来源单独判成败；有任何失败，退出码非 0。
+BACKUP_DIR="$HOME/mac_agent_sync"
+LOG="$HOME/.hermes/mac_sync.log"
+MAC="wangyipeng@192.168.3.115"
+ts(){ date '+%Y-%m-%d %H:%M:%S'; }
+log(){ echo "[$(ts)] $*" >> "$LOG"; }
+
+log "开始同步"
+if ! ping -c 1 -W 3 192.168.3.115 >/dev/null 2>&1; then
+  log "⚠️ Mac 离线/休眠，跳过（下次增量会补上）"; exit 0
+fi
+
+fail=0
+pull(){ # $1=名称 $2=远端路径 $3=本地路径 其余=rsync 过滤参数
+  local name=$1 src=$2 dst=$3; shift 3
+  mkdir -p "$dst"
+  local before; before=$(find "$dst" -type f | wc -l)
+  if rsync -az --update --timeout=30 "$@" "$MAC:$src" "$dst" >> "$LOG" 2>&1; then
+    local after; after=$(find "$dst" -type f | wc -l)
+    log "✓ $name: 本地文件 $before → $after（+$((after-before))）"
+  else
+    log "✗ $name: rsync 失败，退出码 $?"; fail=1
+  fi
+}
+
+pull claude       "~/.claude/"                  "$BACKUP_DIR/claude/" \
+     --include='*/' --include='*.jsonl' --include='*.md' --include='*.json' \
+     --exclude='cache/***' --exclude='*'
+pull codex        "~/.codex/sessions/"          "$BACKUP_DIR/codex/sessions/" \
+     --include='*/' --include='*.jsonl' --exclude='*'
+pull codex-archv  "~/.codex/archived_sessions/" "$BACKUP_DIR/codex/archived_sessions/" \
+     --include='*/' --include='*.jsonl' --exclude='*'
+pull dsh          "~/.dsh/sessions/"            "$BACKUP_DIR/dsh/sessions/" \
+     --include='*/' --include='*.zstd' --include='*.jsonl' --include='*.json' --exclude='*'
+pull grok         "~/.grok/sessions/"           "$BACKUP_DIR/grok/" \
+     --include='*/' --include='updates.jsonl' --exclude='*'
+
+# ZCode 会话库正在写，先在 Mac 上做一致性备份，再拉这一个文件。不拉缓存和图形界面配置。
+mkdir -p "$BACKUP_DIR/zcode"
+if ssh -o BatchMode=yes -o ConnectTimeout=10 "$MAC" 'sqlite3 ~/.zcode/cli/db/db.sqlite ".backup /tmp/zcode-kb.sqlite"' >> "$LOG" 2>&1 \
+   && rsync -az --timeout=60 "$MAC:/tmp/zcode-kb.sqlite" "$BACKUP_DIR/zcode/db.sqlite" >> "$LOG" 2>&1; then
+  log "✓ zcode: 会话库已备份"
+else
+  log "✗ zcode: 备份失败"; fail=1
+fi
+
+
+[ $fail -eq 0 ] && log "同步完成（全部成功）" || log "同步结束，有失败项，见上"
+exit $fail

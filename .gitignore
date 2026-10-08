@@ -1,0 +1,9 @@
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.lock
+*.lock.*
+__pycache__/
+raw/
+batches/
