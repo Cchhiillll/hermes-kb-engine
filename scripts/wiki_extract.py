@@ -6,7 +6,7 @@
   wiki_extract.py [--max 10]         提炼最多 10 批
   wiki_extract.py --dry [--date D]   试跑：只提炼一批、打印结果，不写库"""
 import hashlib, json, os, re, sys, time
-sys.path.insert(0, os.path.expanduser("~/.hermes/scripts")); sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
+sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts")); sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
 import wiki_feed as wf
 
 MODEL, PROVIDER, BUDGET = "grok-4.6", "xai-oauth", 48000   # 10-07：切换回 Grok-4.6

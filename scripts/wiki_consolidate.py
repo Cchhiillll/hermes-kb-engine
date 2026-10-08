@@ -17,7 +17,7 @@ luna 让路闸：入口 wiki_target_luna.py 读现状页的 luna 用量，超线
 """
 import collections, fcntl, glob, hashlib, json, os, re, shutil, sqlite3, sys, time
 
-sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 W = os.environ.get("WIKI_DIR") or os.path.expanduser("~/brain/wiki")          # 测试时指向副本
 DB = os.environ.get("KB_DB") or os.path.expanduser("~/brain/kb/kb.sqlite")
 REC_ENV = os.environ.get("CONSOLIDATE_REC")    # 测试时指定；正式运行每组一个记录文件（10-04：4 路共用一个「先清空再写」的文件，交卷互相读错）

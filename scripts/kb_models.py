@@ -46,6 +46,11 @@ def gemini():
 
 
 def pick():
+    # 支持自定义环境变量自由指定任意模型，不受特定厂商限制
+    env_m = os.environ.get('KB_MODEL')
+    env_p = os.environ.get('KB_PROVIDER', 'custom')
+    if env_m:
+        return ('custom', env_m, env_p, f'使用自定义模型: {env_m}')
     """返回 (名字, 模型, provider, 三家状态说明)；都不能用时名字为 None。"""
     notes = []
     for name, fn in (("grok", grok), ("luna", luna), ("gemini", gemini)):

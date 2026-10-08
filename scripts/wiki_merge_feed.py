@@ -3,7 +3,7 @@
 由它逐条并进已有页面（更新/更正/新建），记录写进 batches/批次号.log.md（无可记的段已预填），最后 wiki_feed.py --done。
 深加工正在改页面时不分活；多路并入各领各的批（正在并入的批不再发）；没有待并入的就不叫醒模型。"""
 import json, os, sys, time
-sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 import wiki_feed as wf
 import glob, kb_lock
 

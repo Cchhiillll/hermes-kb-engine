@@ -12,6 +12,7 @@
 中文检索：CJK 按双字切词 + 英文数字按词，FTS5 BM25 排序，再按新旧加权。"""
 import os, re, sys, glob, json, math, time, sqlite3, hashlib, subprocess, datetime as dt
 from urllib.parse import unquote
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../tools')))
 sys.path.insert(0, os.path.expanduser("~/brain/tools"))
 import archive as ar
 
