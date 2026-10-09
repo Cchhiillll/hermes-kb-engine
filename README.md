@@ -12,7 +12,13 @@ Hermes KB Engine 是一套经过生产环境长周期检验的 Agent 外部记�
    - **语料层 (`raw/conversations/`)**：纯追加（Append-Only）只读原始对话与事件，段落级全局唯一标号。
    - **索引层 (`kb.sqlite` + `QMD`)**：BM25 全文索引 + 向量混合检索，毫秒级主题定位与语义坐标寻址。
    - **活知识层 (`wiki/`)**：遵循 Karpathy LLM-Wiki 规范的结构化 Markdown，强双向链接，单页控制在 400 行以内。
-2. **时空彻底解耦**：
+2. **多源数据采集与标准化流转（Ingestion Pipeline）**：
+   - **采集源适配**：原生支持本地 Hermes（`~/.hermes/state.db` 及 profiles）、Claude Code（`~/.claude/projects/`）、Codex（`~/.codex/sessions/`）以及外部同步的通用 JSONL 会话；通过 `tools/sync_remote.sh` 增量拉取远程端。
+   - **入库切片 (`kb build`)**：清洗掉系统提示词与工具裸输出，拆分成一问一答切片，分配唯一段 ID（`^[kb:段id]`），存入 `kb.sqlite` 的 chunks 全文索引表。
+   - **两步提炼 (`wiki_extract.py`)**：定时扫描未读对话切片，由模型提炼出具备复用价值的事实、结论、偏好、踩坑与排障经验。
+   - **受控并入 (`wiki_merge_feed.py`)**：基于排他文件锁原子化挂载到 `wiki/` 目录下的对应页（`projects/` 项目页、`entities/` 实体/服务页、`concepts/` 通用方法页）。
+   - **反熵增重整 (`wiki_consolidate.py`)**：定期合并碎片页与收敛大页，带有反引号代码 70% 保留率的 Fail-Closed 硬门禁。
+3. **时空彻底解耦**：
    - 静态工程经验与稳定事实沉淀入 Wiki。
    - 机器、服务、网络、任务等易变现场状态交由 15 分钟级探针脚本（`now_status.py`）直出到 `now.md`。问即时现状直接读取看板，绝不让 Agent 依赖历史笔记猜测现实。
 3. **两步受控提炼（Two-Stage Distillation）**：
