@@ -20,8 +20,8 @@ Hermes KB Engine 是一套经过生产环境长周期检验的 Agent 外部记�
    - **反熵增重整 (`wiki_consolidate.py`)**：定期合并碎片页与收敛大页，带有反引号代码 70% 保留率的 Fail-Closed 硬门禁。
 3. **时空彻底解耦**：
    - 静态工程经验与稳定事实沉淀入 Wiki。
-   - 机器、服务、网络、任务等易变现场状态交由 15 分钟级探针脚本（`now_status.py`）直出到 `now.md`。问即时现状直接读取看板，绝不让 Agent 依赖历史笔记猜测现实。
-3. **两步受控提炼（Two-Stage Distillation）**：
+   - 易变现场状态（服务连通性、网络、即时任务）由独立现场探针直出到现状看板（`now.md`），问即时现状直接读取看板，绝不让 Agent 依赖历史笔记猜测现实。
+4. **两步受控提炼（Two-Stage Distillation）**：
    - **第一步（Extract）**：使用轻量极速模型进行纯文本无工具提取，输出结构化事实增量 JSON，避免 Agent 边查边改带来的 Token 巨额消耗与死循环。
    - **第二步（Merge）**：基于排他文件锁（`kb_lock.py`）原子化受控写入目标 Wiki 页面，彻底消除多端/并发冲突。
 4. **反熵增与 Fail-Closed 门禁**：
@@ -46,18 +46,17 @@ hermes-kb-engine/
 │   └── qmd_embed_all.sh     # QMD 批量向量化脚本
 ├── plugins/                 # Hermes 网关与运行时插件
 │   └── kb-recall/           # 拦截器：意图分流（现状探针 vs 经验检索召回）
-├── scripts/                 # 提炼、门禁、看板与并发控制脚本
+├── scripts/                 # 提炼、门禁与并发控制脚本
 │   ├── kb_lock.py           # 基于文件锁与超时的并发写入控制器
 │   ├── kb_models.py         # 多模型调用抽象与环境变量解析
 │   ├── kb_stall_alert.py    # 积压监控与报警探针
-│   ├── now_status.py        # 15 分钟现场状态探针（生成 now.md）
 │   ├── qmd_refresh.sh       # QMD 增量索引刷新器
 │   ├── wiki_consolidate.py  # 页面重整合并门禁脚本（含 70% 校验）
 │   ├── wiki_extract.py      # 第一步：纯文本批量提炼
 │   └── wiki_merge_feed.py   # 第二步：排他锁增量入库
-├── tools/                   # 流水线与跨端同步工具
+├── tools/                   # 流水线与多端同步工具
 │   ├── nightly.sh           # 夜间全自动流水线入口
-│   └── sync_mac.sh          # 跨机会话同步脚本
+│   └── sync_mac.sh          # Mac 端多 Agent 增量拉取脚本
 └── wiki/                    # 知识库规范与初始骨架
     ├── SCHEMA.md            # Wiki 文档排版规范与 Frontmatter 约定
     ├── _meta/map.md         # 全局雷达索引地图模板
@@ -118,11 +117,12 @@ export OPENAI_API_KEY="your-api-key"
 
 ### 5. 定时调度接入
 
-将定时任务注册到系统 Crontab 或 Hermes 定时调度器：
+将定时任务注册到系统 Crontab 或 Hermes 定时调度器（可直接导入 `cron/hermes_kb_jobs.json`）：
 
-- **每 15 分钟**：运行 `now_status.py` 刷新现场状态并生成 `~/brain/kb/now.md`。
-- **每 30 分钟**：运行 `wiki_extract.py` 消化待处理批次。
-- **每日凌晨 03:00**：执行 `tools/nightly.sh`，完成多端会话归集、增量分块（`kb build`）与 QMD 索引重建。
+- **每 10 分钟**：运行 `wiki_merge_feed.py`，由 Hermes 执行语义原子并入并保留出处段 ID。
+- **每 30 分钟**：运行 `wiki_extract.py` 消化待处理切片。
+- **每 4 小时**：运行 `wiki_consolidate.py` 进行碎片页合并与大页四段式重整（70% 代码保留 AST 门禁）。
+- **每日凌晨 03:00**：执行 `tools/nightly.sh`，完成 Mac 会话拉取、增量分块（`kb build`）、QMD 索引更新与 Git 自动备份。
 
 ---
 
