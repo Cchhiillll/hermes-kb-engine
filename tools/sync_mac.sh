@@ -5,16 +5,30 @@
 
 BACKUP_DIR="${MAC_SYNC_DIR:-$HOME/mac_agent_sync}"
 LOG="${LOG_PATH:-$HOME/.hermes/mac_sync.log}"
-MAC="${MAC_HOST:-wangyipeng@192.168.3.115}"
-MAC_IP=$(echo "$MAC" | awk -F'@' '{print $NF}')
+
+# 探测 Mac 可达 IP（支持环境变量指定，或在已知局域网漂移 IP 中自动发现）
+MAC_USER="${MAC_USER:-wangyipeng}"
+CANDIDATE_IPS=("${MAC_IP:-}" "192.168.3.205" "192.168.3.115")
+TARGET_IP=""
+
+for ip in "${CANDIDATE_IPS[@]}"; do
+  [ -z "$ip" ] && continue
+  if ping -c 1 -W 2 "$ip" >/dev/null 2>&1; then
+    TARGET_IP="$ip"
+    break
+  fi
+done
 
 ts(){ date '+%Y-%m-%d %H:%M:%S'; }
 log(){ echo "[$(ts)] $*" >> "$LOG"; }
 
 log "开始同步"
-if [ -n "$MAC_IP" ] && ! ping -c 1 -W 3 "$MAC_IP" >/dev/null 2>&1; then
-  log "⚠️ Mac 离线/休眠，跳过（下次增量会补上）"; exit 0
+if [ -z "$TARGET_IP" ]; then
+  log "⚠️ Mac 离线/休眠（尝试候选 IP 均不可达），跳过（下次增量会补上）"; exit 0
 fi
+
+MAC="${MAC_USER}@${TARGET_IP}"
+log "✓ 已定位目标 Mac: $MAC"
 
 fail=0
 pull(){ # $1=名称 $2=远端路径 $3=本地路径 其余=rsync 过滤参数

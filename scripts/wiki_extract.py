@@ -45,20 +45,44 @@ def select(c, date=None):
     return ids, "".join(out), used
 
 def extract(text, model=MODEL, provider=PROVIDER):
-    from hermes_cli.env_loader import load_hermes_dotenv
-    load_hermes_dotenv()                     # 和网关一样加载 Hermes 自己的环境（密钥由 Hermes 管，脚本不碰）
-    from agent.auxiliary_client import call_llm
-    r = call_llm(provider=provider, model=model, messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": text}],
-                 temperature=0.2, timeout=300)
-    raw = r.choices[0].message.content
+    raw = None
+    tok = 0
+    # 1. 优先使用 Hermes 本地环境与内置 auxiliary call_llm
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv()
+        from agent.auxiliary_client import call_llm
+        r = call_llm(provider=provider, model=model, messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": text}],
+                     temperature=0.2, timeout=300)
+        raw = r.choices[0].message.content
+        usage = getattr(r, "usage", None)
+        tok = (getattr(usage, "prompt_tokens", 0) or 0) + (getattr(usage, "completion_tokens", 0) or 0)
+    except Exception:
+        # 2. 独立沙盒或通用环境变量 Fallback
+        import urllib.request
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "system", "content": PROMPT}, {"role": "user", "content": text}],
+            "temperature": 0.2
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{base_url}/chat/completions", data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        })
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        raw = data["choices"][0]["message"]["content"]
+        tok = data.get("usage", {}).get("total_tokens", 0)
+
     raw = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.M).strip()
-    usage = getattr(r, "usage", None)
     notes = json.loads(raw)
     for it in notes.get("items", []):          # 10-04：agent 自己的说法由脚本统一标「未核实」，不靠模型自觉（防止错话被洗成知识）
         if it.get("basis") not in ("user", "output") and not str(it.get("text", "")).startswith("（未核实）"):
             it["basis"] = "agent"
             it["text"] = "（未核实）agent 当时称：" + str(it.get("text", ""))
-    return notes, (getattr(usage, "prompt_tokens", 0) or 0) + (getattr(usage, "completion_tokens", 0) or 0)
+    return notes, tok
 
 def main():
     a = sys.argv[1:]; dry = "--dry" in a

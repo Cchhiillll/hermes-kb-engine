@@ -8,13 +8,13 @@ import wiki_feed as wf
 import glob, kb_lock
 
 def main(gate=True):
-    """gate=True：这是 Grok 那个并入任务，只在 Grok 能用时干活；Grok 不能用时由 luna（wiki_merge_feed_luna.py）、
-    10-08 起再由 Gemini（wiki_merge_feed_flash.py）那个任务接手（10-06：不再一家出问题全停）。三个任务共用写入锁，不会同时改知识库。"""
+    """gate=True：检查是否有可用模型。无论主力是 custom、grok、luna 还是 gemini，只要有可用模型就领活。
+    都不能用时优雅让路休眠，共用写入锁，不会同时改知识库。"""
     if gate:
         import kb_models
         name, _, _, why = kb_models.pick()
-        if name != "grok":
-            print(f"NO_TARGET：Grok 现在不能用（{why}），这轮{'由 ' + name + ' 那个并入任务做' if name else '三家都不能用，先停'}。")
+        if not name:
+            print(f"NO_TARGET：当前无可用模型（{why}），先停。")
             print(json.dumps({"wakeAgent": False}))
             return
     c = wf.conn(); now = time.time()

@@ -539,7 +539,8 @@ def done(gid, check_only=False):
     print(f"完成：{len(moved)} 页并进 {', '.join(targets)}；改了 {links} 处链接；concepts/ {before} → {after} 页。")
 
 
-USAGE = """用法（10-05 起命令行不再领活，领活只由定时任务的入口脚本做）：
+USAGE = """用法：
+  wiki_consolidate.py              领一组活（定时任务或命令行直接分活）
   wiki_consolidate.py --check 组号   只检查这次交卷合不合格，不提交（交卷前自查用这个，不要自己写脚本）
   wiki_consolidate.py --done 组号    检查并提交
   wiki_consolidate.py --peek         只看还剩哪些活"""
@@ -552,5 +553,7 @@ if __name__ == "__main__":
         done(a[1], check_only=True)
     elif a == ["--peek"]:
         pick(peek=True)
+    elif not a:
+        pick()
     else:
         print(USAGE); sys.exit(2)
