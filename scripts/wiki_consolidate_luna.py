@@ -31,9 +31,9 @@ def luna_usage():
 
 if __name__ == "__main__":
     u = luna_usage()
-    if u is None or u[0] >= LIMIT_5H or u[1] >= LIMIT_WEEK:
-        print(f"NO_TARGET：luna 用量{'读不到' if u is None else f'5 小时 {u[0]}%、本周 {u[1]}%'}，给并入新对话让路，这轮不深加工。")
+    if u is not None and (u[0] >= LIMIT_5H or u[1] >= LIMIT_WEEK):
+        print(f"NO_TARGET：luna 用量 5 小时 {u[0]}%、本周 {u[1]}%，给并入新对话让路，这轮不深加工。")
         print(json.dumps({"wakeAgent": False}))
     else:
         import wiki_consolidate as wiki_target
-        wiki_target.pick(prefer="light")   # 10-06：luna 只干轻活（补日期）；重写长页、合并留给 Grok
+        wiki_target.pick(prefer="light")

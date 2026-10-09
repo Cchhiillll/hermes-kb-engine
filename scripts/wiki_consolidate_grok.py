@@ -13,7 +13,9 @@ def should_stop(used):
 def _token(refresh=False):
     """从 Hermes 的凭证池取 Grok 令牌；refresh=True 时自动续期。"""
     os.environ.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes"))
-    os.environ.setdefault("HTTPS_PROXY", "http://127.0.0.1:10819"); os.environ.setdefault("HTTP_PROXY", "http://127.0.0.1:10819")
+    proxy = os.environ.get("HTTPS_PROXY")
+    if proxy:
+        os.environ.setdefault("HTTP_PROXY", proxy)
     sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
     from agent.credential_pool import load_pool
     p = load_pool("xai-oauth"); es = p.entries()
@@ -28,8 +30,8 @@ def _token(refresh=False):
 def week_used():
     """只返回本周已用百分比；读不到返回 None。不打印令牌，也不打印账单原文。
     10-06：新一周还没用时接口不返回 creditUsagePercent，按 0 算（以前当成读不到，两路都停了）。"""
-    proxy = os.environ.get("HTTPS_PROXY") or "http://127.0.0.1:10819"
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    proxy = os.environ.get("HTTPS_PROXY")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})) if proxy else urllib.request.build_opener()
     for refresh in (False, True):
         try:
             tok = _token(refresh)

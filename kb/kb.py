@@ -226,12 +226,21 @@ def ev_agy(f):
             if nat: yield ts, "reply", max(nat, key=len)
 
 def ev_zcode(db, sid):
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    rows = con.execute(
-        "select m.id, m.time_created, json_extract(m.data, '$.role'), p.data "
-        "from message m join part p on p.message_id = m.id "
-        "where m.session_id=? and json_extract(p.data, '$.type')='text' "
-        "order by m.time_created, m.sequence, p.sequence", (sid,))
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    except Exception:
+        try:
+            con = sqlite3.connect(db, timeout=10)
+        except Exception:
+            return
+    try:
+        rows = con.execute(
+            "select m.id, m.time_created, json_extract(m.data, '$.role'), p.data "
+            "from message m join part p on p.message_id = m.id "
+            "where m.session_id=? and json_extract(p.data, '$.type')='text' "
+            "order by m.time_created, m.sequence, p.sequence", (sid,)).fetchall()
+    except Exception:
+        return
     msgs = {}; order = []
     for mid, ts, role, pdata in rows:
         if mid not in msgs:
@@ -313,28 +322,50 @@ def sources():
     """生成所有待收录会话: (来源, 会话, 项目, 文件或键, 修改时间, 事件生成器)"""
     g = lambda p, r=False: glob.glob(p, recursive=r)
 
-    # 1. Mac 远程同步端
-    for f in g(f"{SYNC}/claude/projects/*/*.jsonl") + g(f"{SYNC}/claude/backups/*/*/*.jsonl"):
-        yield "mac-claude", os.path.basename(f)[:8], project_of(first_cwd(f, "claude")), f, os.path.getmtime(f), lambda f=f: ev_claude(f)
-    for f in g(f"{SYNC}/codex/sessions/**/rollout-*.jsonl", True) + g(f"{SYNC}/codex/archived_sessions/**/*.jsonl", True):
-        yield "mac-codex", os.path.basename(f)[28:64], project_of(first_cwd(f, "codex")), f, os.path.getmtime(f), lambda f=f: ev_codex(f)
-    for f in g(f"{SYNC}/dsh/sessions/**/session*.jsonl.zstd", True):
-        if "session.v2" not in f and os.path.exists(f.replace("session.jsonl.zstd", "session.v2.jsonl.zstd")): continue
-        m = re.search(r"session-([0-9a-f\-]{8})", f); d = os.path.basename(os.path.dirname(os.path.dirname(f)))
-        proj = d.split("AI~0020Native-")[-1].strip("-") if "AI~0020Native-" in d else ""
-        yield "mac-dsh", m.group(1) if m else f[-20:], proj, f, os.path.getmtime(f), lambda f=f: ev_dsh(f)
-    for f in g(f"{SYNC}/grok/**/updates.jsonl", True):
-        sid = os.path.basename(os.path.dirname(f))
-        parent = os.path.basename(os.path.dirname(os.path.dirname(f)))
-        yield "mac-grok", sid[:36], project_of(unquote(parent)) or "Grok", f, os.path.getmtime(f), lambda f=f: ev_grok(f)
-    mz = f"{SYNC}/zcode/db.sqlite"
-    if os.path.exists(mz):
+    # 1. 扫描 Claude Code 会话（同时支持本地宿主目录与同步目录）
+    claude_pats = [f"{HOME}/.claude/projects/*/*.jsonl", f"{HOME}/.claude/backups/*/*/*.jsonl",
+                   f"{SYNC}/claude/projects/*/*.jsonl", f"{SYNC}/claude/backups/*/*/*.jsonl"]
+    for pat in claude_pats:
+        for f in g(pat):
+            yield "mac-claude", os.path.basename(f)[:8], project_of(first_cwd(f, "claude")), f, os.path.getmtime(f), lambda f=f: ev_claude(f)
+
+    # 2. 扫描 Codex 会话（同时支持本地宿主目录与同步目录）
+    codex_pats = [f"{HOME}/.codex/sessions/**/rollout-*.jsonl", f"{HOME}/.codex/archived_sessions/**/*.jsonl",
+                  f"{SYNC}/codex/sessions/**/rollout-*.jsonl", f"{SYNC}/codex/archived_sessions/**/*.jsonl"]
+    for pat in codex_pats:
+        for f in g(pat, True):
+            yield "mac-codex", os.path.basename(f)[28:64], project_of(first_cwd(f, "codex")), f, os.path.getmtime(f), lambda f=f: ev_codex(f)
+
+    # 3. 扫描 DSH 会话（同时支持本地宿主目录与同步目录）
+    dsh_pats = [f"{HOME}/.dsh/sessions/**/session*.jsonl.zstd", f"{SYNC}/dsh/sessions/**/session*.jsonl.zstd"]
+    for pat in dsh_pats:
+        for f in g(pat, True):
+            if "session.v2" not in f and os.path.exists(f.replace("session.jsonl.zstd", "session.v2.jsonl.zstd")): continue
+            m = re.search(r"session-([0-9a-f\-]{8})", f); d = os.path.basename(os.path.dirname(os.path.dirname(f)))
+            proj = d.split("AI~0020Native-")[-1].strip("-") if "AI~0020Native-" in d else ""
+            yield "mac-dsh", m.group(1) if m else f[-20:], proj, f, os.path.getmtime(f), lambda f=f: ev_dsh(f)
+
+    # 4. 扫描 Grok 会话（同时支持本地宿主目录与同步目录）
+    grok_pats = [f"{HOME}/.grok/sessions/**/updates.jsonl", f"{SYNC}/grok/**/updates.jsonl"]
+    for pat in grok_pats:
+        for f in g(pat, True):
+            sid = os.path.basename(os.path.dirname(f))
+            parent = os.path.basename(os.path.dirname(os.path.dirname(f)))
+            yield "mac-grok", sid[:36], project_of(unquote(parent)) or "Grok", f, os.path.getmtime(f), lambda f=f: ev_grok(f)
+
+    # 5. 扫描 ZCode 会话库（同时支持本地宿主目录与同步目录）
+    zcode_dbs = [f"{HOME}/.zcode/cli/db/db.sqlite", f"{SYNC}/zcode/db.sqlite"]
+    seen_zcode = set()
+    for zdb in zcode_dbs:
+        if not os.path.exists(zdb): continue
         try:
-            mc = sqlite3.connect(f"file:{mz}?mode=ro", uri=True)
-            for sid, directory, updated in mc.execute("select id, directory, time_updated from session"):
+            zc = sqlite3.connect(f"file:{zdb}?mode=ro", uri=True, timeout=10)
+            for sid, directory, updated in zc.execute("select id, directory, time_updated from session"):
+                if sid in seen_zcode: continue
+                seen_zcode.add(sid)
                 mt = float(updated) / 1000.0 if updated and float(updated) > 1e12 else float(updated or 0)
                 short = sid.replace("sess_", "")[:8]
-                yield "mac-zcode", short, project_of(directory or "") or "ZCode", mz + ":" + sid, mt, lambda db=mz, sid=sid: ev_zcode(db, sid)
+                yield "mac-zcode", short, project_of(directory or "") or "ZCode", zdb + ":" + sid, mt, lambda db=zdb, sid=sid: ev_zcode(db, sid)
         except Exception: pass
 
     # 2. 本地 Agent 端

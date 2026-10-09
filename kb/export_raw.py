@@ -2,8 +2,16 @@
 """LLM 维基原始资料层：把 kb.sqlite 里的全部对话按会话导出成 Markdown → ~/brain/wiki/raw/conversations/<来源>/<日期>_<会话>.md
 内容没变的文件不重写（qmd update 据此只重扫变化的）。qmd 负责检索；这里只做格式转换。"""
 import os, re, sqlite3, collections
-DB = os.path.expanduser("~/brain/kb/kb.sqlite")
-OUT = os.path.expanduser("~/brain/wiki/raw/conversations")
+DB = os.environ.get("KB_DB_PATH") or os.path.expanduser("~/brain/kb/kb.sqlite")
+_out_env = os.environ.get("RAW_DIR")
+if _out_env:
+    OUT = _out_env
+elif os.path.exists(os.path.expanduser("~/brain/raw/conversations")):
+    OUT = os.path.expanduser("~/brain/raw/conversations")
+elif os.path.exists(os.path.expanduser("~/brain/wiki/raw/conversations")):
+    OUT = os.path.expanduser("~/brain/wiki/raw/conversations")
+else:
+    OUT = os.path.expanduser("~/brain/raw/conversations")
 
 def main():
     c = sqlite3.connect(DB)

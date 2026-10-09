@@ -44,6 +44,40 @@ def select(c, date=None):
         out.append(head + block); ids.append(cid); used += len(head) + len(block); cur = (src, sess)
     return ids, "".join(out), used
 
+def get_llm_credentials():
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    env_file = os.path.expanduser("~/.hermes/.env")
+    env_vars = {}
+    if os.path.exists(env_file):
+        for line in open(env_file, encoding="utf-8", errors="ignore"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env_vars[k.strip()] = v.strip().strip("'\"")
+
+    cfg_file = os.path.expanduser("~/.hermes/config.yaml")
+    if os.path.exists(cfg_file):
+        try:
+            for l in open(cfg_file, encoding="utf-8", errors="ignore"):
+                if "base_url:" in l and not base_url:
+                    base_url = l.split("base_url:", 1)[1].strip().strip("'\"")
+                elif "api:" in l and not base_url:
+                    base_url = l.split("api:", 1)[1].strip().strip("'\"")
+        except Exception:
+            pass
+
+    if not api_key:
+        for k in ("OPENAI_API_KEY", "MODELVERSE_API_KEY", "CPA_API_KEY", "XAI_API_KEY"):
+            if k in env_vars:
+                api_key = env_vars[k]; break
+            if k in os.environ:
+                api_key = os.environ[k]; break
+
+    base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://cpa.modelverseapi.com/v1").rstrip("/")
+    api_key = api_key or ""
+    return base_url, api_key
+
 def extract(text, model=MODEL, provider=PROVIDER):
     raw = None
     tok = 0
@@ -60,17 +94,15 @@ def extract(text, model=MODEL, provider=PROVIDER):
     except Exception:
         # 2. 独立沙盒或通用环境变量 Fallback
         import urllib.request
-        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        base_url, api_key = get_llm_credentials()
         payload = json.dumps({
             "model": model,
             "messages": [{"role": "system", "content": PROMPT}, {"role": "user", "content": text}],
             "temperature": 0.2
         }).encode("utf-8")
-        req = urllib.request.Request(f"{base_url}/chat/completions", data=payload, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        })
+        headers = {"Content-Type": "application/json"}
+        if api_key: headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(f"{base_url}/chat/completions", data=payload, headers=headers)
         with urllib.request.urlopen(req, timeout=300) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         raw = data["choices"][0]["message"]["content"]

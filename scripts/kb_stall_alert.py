@@ -67,12 +67,15 @@ if st.get("alerted") and now - st["alerted"] < REPEAT_HOURS * 3600:
     sys.exit(0)
 import kb_models
 name, _, _, why = kb_models.pick()
-from feishu_card import send_feishu_card
-send_feishu_card(
-    title=f"⛔ 知识库停了 {stall_h:.0f} 小时",
-    what_happened=msg + f"\n三家模型：{why}" + (f"（现在能用的是 {name}）" if name else "（三家都不能用）") + f"\n写锁：{kb_lock.describe(kb_lock._read())}",
-    business_impact="新对话进不了知识库，Hermes 查不到最近的事；整理也停在原地。",
-    user_action="把这张卡转给 Claude Code，或在会话里说一句「知识库停了」。",
-    template="red", note="赫尔墨斯 · 知识库停工报警")
+try:
+    from feishu_card import send_feishu_card
+    send_feishu_card(
+        title=f"⛔ 知识库停了 {stall_h:.0f} 小时",
+        what_happened=msg + f"\n三家模型：{why}" + (f"（现在能用的是 {name}）" if name else "（三家都不能用）") + f"\n写锁：{kb_lock.describe(kb_lock._read())}",
+        business_impact="新对话进不了知识库，Hermes 查不到最近的事；整理也停在原地。",
+        user_action="把这张卡转给 Claude Code，或在会话里说一句「知识库停了」。",
+        template="red", note="赫尔墨斯 · 知识库停工报警")
+except Exception as e:
+    print(f"⛔ 知识库停了 {stall_h:.0f} 小时: {msg} (通知分发跳过: {e})")
 st["alerted"] = now
 json.dump(st, open(STATE, "w"))
