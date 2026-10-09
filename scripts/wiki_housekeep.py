@@ -33,6 +33,7 @@ def one_liner(f):
 
 
 def write_if_changed(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     old = open(path, encoding="utf-8").read() if os.path.exists(path) else None
     body = lambda s: re.sub(r"^Last updated:.*$", "", s or "", flags=re.M)
     if old is not None and body(old) == body(text):
