@@ -11,8 +11,7 @@ def should_stop(used):
 
 
 def _token(refresh=False):
-    """从 Hermes 的凭证池取 Grok 令牌；refresh=True 时用 Hermes 自己的方法续期（新令牌写回存储，洛琪希也用这份）。
-    10-06：令牌过期后只读额度会 401，两路整理因此全停了一下午；续期要走代理才连得上 xAI 登录服务器。"""
+    """从 Hermes 的凭证池取 Grok 令牌；refresh=True 时自动续期。"""
     os.environ.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes"))
     os.environ.setdefault("HTTPS_PROXY", "http://127.0.0.1:10819"); os.environ.setdefault("HTTP_PROXY", "http://127.0.0.1:10819")
     sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))

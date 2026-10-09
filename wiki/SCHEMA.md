@@ -1,69 +1,48 @@
 # Wiki Schema
 
 ## Domain
-chillwang 的知识库：他做过、正在做的一切——项目、机器、服务、网站、渠道和账号、工具、做过的决定、定下的规则、踩过的坑和修法、做事的方法。
-由 Hermes 维护，Hermes 靠它了解 chillwang 的全部事情，并随着新对话、新任务不断长大。
+Hermes 自增长知识库规范：记录和沉淀业务工程全生命周期的一切——项目、机器/节点、服务、网络、接口与账号、工具、重要架构决定、踩坑排障与通用方法论。
+由 Hermes 自动化维护，随日常会话、新任务与外部数据源持续自增长与自愈。
 
-## 原始资料（Layer 1）
-- 原始资料是 chillwang 在所有 agent 上的对话，按会话一个 Markdown 文件，在 `raw/conversations/<来源>/`
-  （Mac 的 Claude Code / Codex / DSH，ThinkPad 的 Hermes / 小火龙 / 佐佐木），每晚 3 点自动导出新的。只读，不改。
-- 检索用 qmd：`qmd query "问题" -c raw`（原始对话）、`-c wiki`（知识库页面）；看全文 `qmd get <文件>`。
-- 出处标记：文件里 `## 日期 · 片段id` 是一轮问答；页面结论段尾标 `^[kb:片段id]`。
+## 原始资料层（Layer 1: Raw Conversations）
+- 原始资料是用户在各个 Agent（Hermes、Claude Code、Codex 等）上的对话与工作记录，按会话存储于 `raw/conversations/<来源>/`。
+- 物理特征：纯追加（Append-Only）、只读不可变。
+- 检索方式：使用 QMD 混合检索：`qmd query "问题" -c raw`（检索原始对话），`-c wiki`（检索结构化知识库）。
+- 出处锚点：每轮问答切片打上唯一标识，在知识库结论段尾死绑 `^[kb:段id]`。
 
-## Conventions
-- 文件名：小写、连字符，中文项目名可保留原名（如 `3xui-node.md`、`软路由.md`）。
-- 每页开头 YAML frontmatter（见下）。
-- 页与页用 `[[页面名]]` 互链，每页至少 2 个出链。
-- 改页时更新 `updated` 日期；新页加进 `index.md` 对应分区；每次动作追加到 `log.md`。
-- 新旧冲突：以日期新的为准，旧的挪到页内「历史」一节并注明何时被什么取代；拿不准就两种都写并标 `contested: true`。
-- 不写密钥、密码、token。IP、端口、路径、域名可以写（这是他自己的内部库）。
-- 感情、健康等私人细节不写；和工作有关的个人打算一句带过。
+## 规范约定（Conventions）
+- 文件命名：小写字母、连字符，项目名使用标准名称。
+- 元数据：每页头部必须包含标准 YAML frontmatter。
+- 双向链接：页面之间使用 `[[页面名]]` 互链，每页至少保留 2 个关联出链。
+- 增量维护：修改页面时同步更新 `updated` 字段；新增页面由脚本自动挂载至 `index.md`。
+- 新旧演进：若出现结论冲突，以最新实测和最新出处为准，过时信息压缩沉淀至「历史」小节并注明被取代时间。
+- 安全边界：严格禁止在知识库中明文写入密码、Token、API Key、私人敏感信息。
 
-## Frontmatter
+## Frontmatter 格式
 ```yaml
 ---
 title: 页面标题
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 type: project | entity | concept | query
-tags: [只用下面分类里的]
-sources: [kb:片段id, ...]
+tags: [project, machine, service, tool, rule, howto, fix]
+sources: [kb:段id, ...]
 confidence: high | medium | low
 ---
 ```
 
-## Tag Taxonomy
-- 项目：project, product, site
-- 基础设施：machine, server, network, proxy, container, service
-- 模型与渠道：model, relay, channel, account, pricing
-- 工具与 agent：agent, tool, config, skill
-- 知识：decision, rule, howto, problem, fix, history
-- 其他：work, plan, research
+## 目录分层结构
+- `projects/`：项目页（定义、当前现状、规则与决定、做法与排障、演进历史）
+- `entities/`：实体页（节点、服务/容器、网站、渠道账号、工具与 Agent 运行时）
+- `concepts/`：通用概念页（跨项目的通用工程方法论、SOP、架构模式与排障准则）
+- `queries/`：高价值问答沉淀
+- `_archive/`：已归档或被合并的旧页面
 
-## 目录结构
-- `projects/` 项目页（每个项目一页：是什么、现状、规则、决定、做法与排障、历史）
-- `entities/` 实体页（每台机器、每个服务/容器、每个网站、每个渠道/账号、每个工具/agent；它的做法与排障也写在这页）
-- `concepts/` 概念页（只放跨项目通用的方法和经验；某个项目或服务自己的做法、排障写进那个项目/实体页）
-- `queries/` 值得留下的问答结论
-- `_archive/` 被完全取代的旧页
+## 页面收敛门禁（Consolidation Thresholds）
+- 单页规模：控制在 400 行以内，超过时进行精简收敛或按模块拆分。
+- 避免碎片化：单一故障排障或单次配置写入对应项目/实体页，避免肆意建立孤立碎页。
+- 70% 代码保留门禁：重构和合并页面时，AST 词法级反引号配置/命令代码保留率低于 70% 自动打回。
 
-## Page Thresholds
-- 开新页：先找已有页，能并进去就并进去。项目、实体在 2 段以上对话里出现才开页；concepts/ 只给跨项目通用、在多段对话里反复出现的方法开页。
-- 不开页：一次性的排障、某个项目/服务自己的做法（写进那个项目/实体页的「做法与排障」节）、顺带一提的、琐碎的、和他无关的。
-- 文件名用主题本身，不加「规程」「铁律」「准则」「规范」这类后缀；同一主题只留一页。
-- 加进已有页：提到已有页里的东西。
-- 页面太长：先精简（合并重复、过时内容挪进「历史」），超过约 400 行仍确属两个独立主题才拆。
-- 归档：内容被完全取代时挪进 `_archive/`，从 index 移除；被合并掉的页由脚本挪进 `_archive/merged/`。
-- 收敛（10-04 起）：深加工任务每轮领一组同主题碎页合并成一页（wiki_consolidate.py），出处 ^[kb:段id] 一个不丢。
-
-## 渐进式披露（知识库越大越要守）
-- `_meta/map.md` 是地图：≤30 行，只写知识库有哪几大块、每块是什么、各有多少页、去 index.md 哪个分区找。
-  它会被放进你每次都读的上下文，所以必须短；库再大也不许超过 30 行。
-- `index.md` 和 `_meta/map.md` 由脚本按各页的「> 一句话」自动生成，不手改；所以每页页首都要有这句摘要。
-- 找东西：地图 → index.md 对应分区 → 打开页面 → 需要原文再 `kb search` / `kb open`。
-
-## 做法沉淀成技能
-- 读对话时发现一种可以复用的处理方式（某类问题怎么排查、某类事怎么办、某个系统怎么操作），
-  除了写进 concepts/ 的做法页，还要用 skill_manage 建或更新一个技能：description 写清"什么情况下用"，
-  正文写步骤、坑、要读知识库哪几页（[[页面名]]）。技能平时只露名字和描述，用到才加载——这就是处理不同事情的入口。
-- 技能名用 `chillwang-` 开头，便于区分。
+## 渐进式披露机制
+- `_meta/map.md`：全局雷达地图，严格控制在 ≤30 行，提供最高信噪比的主题空间导航。
+- `index.md`：全量页面目录，由 `wiki_housekeep.py` 自动化聚合生成，严禁手工修改。

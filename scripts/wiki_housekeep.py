@@ -58,7 +58,7 @@ def build_map(counts, total):
     projects = [os.path.basename(f)[:-3] for f in sorted(glob.glob(f"{W}/projects/*.md"))]
     proj = "、".join(projects)
     text = ("# 知识库地图（自动生成，≤30 行）\n\n"
-            f"共 {total} 页。chillwang 做过、正在做的事：项目、机器和服务、渠道账号、工具、规则、踩过的坑和修法。\n\n"
+            f"共 {total} 页。沉淀的系统与工程知识：项目、架构与服务、接口账号、工具、规则、踩坑与解决方案。\n\n"
             + "".join(f"- `{d}/` {counts[d]} 页：{desc}\n" for d, _, desc in SECTIONS)
             + "\n找东西：先 `qmd query \"问题\" -c wiki` → 打开页面；要原始对话用 `-c raw`。全部页面清单在 index.md。\n"
             + f"\n项目：{proj[:600]}{'…' if len(proj) > 600 else ''}\n")

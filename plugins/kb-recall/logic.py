@@ -4,7 +4,7 @@
 ②从 Hermes 自己的知识库（~/brain/wiki）里找出最相关的几页，附上标题、一句话摘要和路径。
 
 - 只在飞书（和命令行测试）对话里生效；定时任务不加。
-- 查法沿用 chillwang-kb 技能定的：关键词 + 语义两路、关掉本地重排（rerank:false），实测 1~2 秒。
+- 查法：关键词 + 语义两路、关掉本地重排（rerank:false），检索仅需 1~2 秒。
 - 查不到、超时、出错都静默跳过，不影响对话。
 """
 import json, os, re, time, urllib.request, logging
@@ -93,7 +93,7 @@ def recall(user_message="", platform=None, **kw):
             break
     log.info("kb-recall 现状页%s，知识库 %d 条，%.1f 秒", "附上" if status else "未附", len(lines), time.time() - t)
     kb = ("【你的知识库里和这句话可能相关的页面（自动检索，供参考）】\n" + "\n".join(lines) +
-          "\n这些是从过去对话整理的笔记，记的是当时的情况：经验、做法和 chillwang 的要求可以照着用；"
+          "\n这些是从过去对话整理的笔记，记的是当时的情况：经验、做法和用户的要求可以照着用；"
           "机器装没装什么、服务和任务在不在跑、配置和授权是什么这类会变的状态，以现场查到的为准——笔记只告诉你去哪查，"
           "说现状前先跑命令看（ls/which/systemctl/cron list/读配置），没查就说「笔记里记的是某日的情况，现在没核实」。"
           "相关的就先读全文（qmd 的 get，路径前加 wiki/）；不相关就忽略。") if lines else ""

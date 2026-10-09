@@ -14,7 +14,7 @@ confidence: high
 
 # Hermes 跨设备自增长知识库完整工程架构方案
 
-> 一句话：面向多设备（Mac/ThinkPad/Linux）与多 Agent 协同的自增长、自愈型 Markdown 知识库系统工程架构方案。
+> 一句话：面向多设备（macOS / Linux / 云端主机）与多 Agent 协同的自增长、自愈型 Markdown 知识库系统工程架构方案。
 
 ---
 
@@ -41,7 +41,7 @@ confidence: high
 ```
 +-----------------------------------------------------------------------------------+
 |                              多端输入源 (Data Sources)                            |
-|    Mac (Claude Code / Codex / DSH)  |  ThinkPad (Hermes / OpenClaw)  |  手机/录音卡 |
+|    多端开发机 (Claude Code / Codex 等)  |  宿主机/网关 (Hermes Agent)  |  多端扩展输入 |
 +-----------------------------------------------------------------------------------+
                                           |
                                           | [每晚 03:00 / 实时归集拉取]
