@@ -1,0 +1,26 @@
+# ~/.hermes/config.yaml 片段（10-10）：让 Hermes 能直接用 QMD 查知识库和语雀文档。
+# 改完在 Hermes 里运行 /reload-mcp。两种接法二选一（同一个条目不能同时写 command 和 url）。
+
+mcp_servers:
+  # 接法一：连已经常驻的 QMD HTTP 服务（qmd mcp --http --daemon，默认 127.0.0.1:8181）。
+  # kb-recall 插件也连这个地址，推荐用这种，两边共用一个进程、模型只加载一次。
+  qmd:
+    url: "http://127.0.0.1:8181/mcp"
+    timeout: 60
+    tools:
+      include: [query, get, multi_get, status]
+      resources: false
+      prompts: false
+
+  # 接法二：由 Hermes 按需拉起 stdio 进程（不需要常驻服务；每次连接都要重新加载模型，慢一些）。
+  # qmd_stdio:
+  #   command: "qmd"
+  #   args: ["mcp"]
+  #   tools:
+  #     include: [query, get, multi_get, status]
+
+# 学习闭环（技能复盘）要求技能和记忆的写入先进待审区，人工确认后才生效：
+# skills:
+#   write_approval: true
+# memory:
+#   write_approval: true
