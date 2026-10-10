@@ -1,0 +1,14 @@
+[project]
+name = "hermes-kb-engine"
+version = "0.2.0"
+description = "Hermes Agent 个人知识库引擎：多 Agent 会话 → 可检索、可引用的 Markdown 知识库"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []          # 运行时只用标准库
+
+[project.optional-dependencies]
+test = ["pytest>=8", "shellcheck-py>=0.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
