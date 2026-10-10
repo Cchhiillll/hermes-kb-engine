@@ -48,6 +48,9 @@ _SPEC = {
     "model": (["KB_MODEL"], ""),
     "provider": (["KB_PROVIDER"], "custom"),
     "base_url": (["OPENAI_BASE_URL"], ""),
+    # kb-recall 命中日志（JSONL；学习闭环据此统计「被用过」）与检索评测目录
+    "recall_log": (["KB_RECALL_LOG"], "{brain_dir}/kb/recall_hits.jsonl"),
+    "eval_dir": (["KB_EVAL_DIR"], "{brain_dir}/kb/eval"),
     # 语雀：导出工具（yuque-exporter / elog / 空 = 不同步）、导出原样目录、清洗后供检索的目录
     "yuque_tool": (["KB_YUQUE_TOOL"], ""),
     "yuque_export_dir": (["KB_YUQUE_EXPORT_DIR"], "{brain_dir}/sources/yuque-export"),
@@ -99,7 +102,7 @@ def load():
             if isinstance(v, str) and "{" in v:
                 out[k] = v.format(**out)
     for k, v in out.items():
-        if isinstance(v, str) and (v.startswith("~") or k.endswith("_dir") or k in ("db", "lock_file", "now_file")):
+        if isinstance(v, str) and (v.startswith("~") or k.endswith("_dir") or k in ("db", "lock_file", "now_file", "recall_log")):
             out[k] = os.path.expanduser(v) if v else v
     return Config(out)
 

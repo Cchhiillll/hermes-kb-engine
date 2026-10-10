@@ -21,7 +21,7 @@ def test_hits_formatted_and_status(kbenv, monkeypatch):
     (kbenv.brain / "kb").mkdir(parents=True, exist_ok=True)
     (kbenv.brain / "kb/now.md").write_text("服务全部正常", encoding="utf-8")
     lg = _logic(kbenv)
-    monkeypatch.setattr(lg, "_search", lambda t: [
+    monkeypatch.setattr(lg, "_search", lambda t, cols=None: [
         {"file": "wiki/projects/yuque.md", "score": 0.9},
         {"file": "wiki/index.md", "score": 0.9},
         {"file": "wiki/projects/low.md", "score": 0.1}])
