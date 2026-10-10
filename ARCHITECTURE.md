@@ -215,6 +215,24 @@ confidence: high
   (零历史知识库依赖，防止旧笔记冒充现状)    [动态注入 System Context (聊完即焚)]
 ```
 
+### 5. 语雀文档源（Yuque Source，10-10）
+
+```
+[语雀] --(yuque-exporter / Elog 增量导出)--> ~/brain/sources/yuque-export/   原样 Markdown
+          |
+          v  kb/clean_yuque.py（去 HTML 残留、统一 frontmatter、加「上下文」行、只删自己生成的文件）
+   ~/brain/sources/yuque/  ----> QMD「yuque」集合（kb-recall 与 Hermes 的 qmd MCP 一起查）
+          |
+          +----> kb.py 来源 yuque-doc：按 ## 小节切片，出处 ^[kb:yuque-doc:文档键:小节序号]
+```
+
+- **语雀是「参考资料」，不是对话**：`yuque-doc` 和 `page` 一样列在 `kb_config.NON_CONVERSATION_SRCS` 里，不进「读历史 / 提炼」队列，也不导出到 `raw/conversations`；
+  语雀里删掉或改名的文档，下次 `kb build` 时连同片段一起删除（对话来源仍然只增不删）。
+- **上下文行**（Contextual Retrieval 的轻量做法）：每篇 H1 下写「> 上下文：知识库 › 目录 › 标题」，每个 `##` 小节下写「> 上下文：标题 › 小节」，
+  QMD 按块切分时，命中某一小节也带着它所属的文档和目录。
+- **文档键**：有语雀文档 id 就用 id，没有（yuque-exporter 导出不带 frontmatter）就用「知识库/目录/标题」的哈希，保证出处稳定。
+- **召回**：kb-recall 在语雀目录存在时默认查 `wiki,yuque` 两个集合（`KB_RECALL_COLLECTIONS` 可改），查询出错自动退回只查 `wiki`；语雀命中会附上原文链接和语雀更新日期。
+
 ---
 
 ## 四、 核心防护门禁（Fail-Closed 规则集）
@@ -244,14 +262,18 @@ confidence: high
 - **安装 QMD 本地检索器**：
   ```bash
   # 安装 qmd 并建立本地两层索引空间
-  qmd collection add wiki ~/brain/wiki
-  qmd collection add raw ~/brain/raw/conversations
+  qmd collection add ~/brain/wiki --name wiki
+  qmd collection add ~/brain/raw/conversations --name raw
+  qmd collection add ~/brain/sources/yuque --name yuque   # 可选：语雀文档
   ```
 
 ### 2. 核心文件与资产落地结构
 ```
 ~/brain/
   ├── raw/conversations/    # 原始对话层 (只读不可变)
+  ├── sources/
+  │   ├── yuque-export/     # 语雀导出工具写的原样 Markdown（可选）
+  │   └── yuque/            # clean_yuque.py 清洗后的语雀文档（QMD yuque 集合）
   ├── kb/
   │   ├── kb.sqlite         # 切片数据库
   │   └── now.md            # 每 15 分钟生成的即时现状看板

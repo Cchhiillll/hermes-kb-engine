@@ -27,3 +27,10 @@ mcp_url = "http://127.0.0.1:8181/mcp"
 
 # 模型（端点与密钥用环境变量 OPENAI_BASE_URL / OPENAI_API_KEY）
 model = ""
+
+# ---- 语雀（10-10）----
+# 导出工具：yuque-exporter / elog；留空 = 不同步语雀
+# yuque_tool = "yuque-exporter"
+# yuque_export_dir = "~/brain/sources/yuque-export"   # 导出工具写的原样 Markdown
+# yuque_dir = "~/brain/sources/yuque"                 # 清洗后、供 QMD「yuque」集合和 kb.py 使用
+# yuque_base_url = "https://www.yuque.com/你的空间"     # 文档没带 url 时，用它 + 知识库 + slug 拼原文链接

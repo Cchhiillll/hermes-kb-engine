@@ -13,7 +13,7 @@ Hermes KB Engine 是一套经过生产环境长周期检验的 Agent 外部记�
    - **索引层 (`kb.sqlite` + `QMD`)**：`kb.sqlite` 是 SQLite FTS5 全文索引；向量检索、混合排序与重排由 QMD 负责。
    - **活知识层 (`wiki/`)**：遵循 Karpathy LLM-Wiki 规范的结构化 Markdown，强双向链接，单页控制在 400 行以内。
 2. **多源数据采集与标准化流转（Ingestion Pipeline）**：
-   - **采集源适配**：原生支持本地 Hermes（`~/.hermes/state.db` 及 profiles）、Claude Code（`~/.claude/projects/`）、Codex（`~/.codex/sessions/`）以及外部同步的通用 JSONL 会话；通过 `tools/sync_mac.sh` 从另一台机器（如 Mac）增量拉取（主机、用户名由配置给出）。
+   - **采集源适配**：原生支持本地 Hermes（`~/.hermes/state.db` 及 profiles）、Claude Code（`~/.claude/projects/`）、Codex（`~/.codex/sessions/`）以及外部同步的通用 JSONL 会话；通过 `tools/sync_mac.sh` 从另一台机器（如 Mac）增量拉取（主机、用户名由配置给出）；可选接入**语雀知识库**（`tools/sync_yuque.sh` + `kb/clean_yuque.py`，作为参考资料进检索，不进提炼队列）。
    - **入库切片 (`kb build`)**：清洗掉系统提示词与工具裸输出，拆分成一问一答切片，分配唯一段 ID（`^[kb:段id]`），存入 `kb.sqlite` 的 chunks 全文索引表。
    - **两步提炼 (`wiki_extract.py`)**：定时扫描未读对话切片，由模型提炼出具备复用价值的事实、结论、偏好、踩坑与排障经验。
    - **受控并入 (`wiki_merge_feed.py`)**：基于排他文件锁原子化挂载到 `wiki/` 目录下的对应页（`projects/` 项目页、`entities/` 实体/服务页、`concepts/` 通用方法页）。
@@ -46,11 +46,13 @@ hermes-kb-engine/
 ├── kb/                        # 底层索引与切片
 │   ├── kb.py                  # 各来源解析 → 问答切片 → 脱敏 → SQLite FTS5
 │   ├── export_raw.py          # 切片按会话导出 Markdown 原始层（只删自己生成的文件）
+│   ├── clean_yuque.py         # 语雀导出 → 检索用 Markdown（去 HTML、统一 frontmatter、加上下文行）
 │   └── qmd_embed_all.sh       # QMD 批量向量化（没算完以非 0 退出）
 ├── plugins/
 │   └── kb-recall/             # Hermes pre_llm_call 插件：现状页 + 知识库相关页注入
 ├── scripts/                   # 提炼、门禁、并发控制与维护
 │   ├── kb_config.py           # 统一配置（环境变量 > 配置文件 > 默认值）
+│   ├── kb_md.py               # frontmatter 读写小工具
 │   ├── kb_llm.py              # 唯一的模型调用口（OpenAI 兼容端点）
 │   ├── kb_models.py           # 模型是否就绪（没配好就让路）
 │   ├── kb_lock.py             # 知识库单写入锁
@@ -62,12 +64,15 @@ hermes-kb-engine/
 │   ├── wiki_consolidate.py    # 碎页合并 / 大页重整 + 70% 门禁
 │   ├── wiki_consolidate_grok.py / wiki_consolidate_luna.py  # 旧的按额度分路入口（可选）
 │   └── wiki_housekeep.py      # index.md / _meta/map.md / log.md 轮换（不调模型）
+├── docs/
+│   └── hermes-config.example.yaml  # Hermes mcp_servers 接 QMD 的配置片段
 ├── tests/                     # pytest 测试（只用合成数据，模型和 QMD 全部打桩）
 ├── pyproject.toml             # pytest 配置与测试依赖
 ├── .github/workflows/ci.yml   # CI：语法检查 + shellcheck + pytest（Python 3.11~3.13）
 ├── tools/
 │   ├── check.sh               # 本地 / CI 统一检查入口
 │   ├── nightly.sh             # 夜间流水线入口（任一步失败则非 0 退出）
+│   ├── sync_yuque.sh          # 语雀增量同步（yuque-exporter / Elog）+ 清洗
 │   └── sync_mac.sh            # 从另一台机器增量拉取各 Agent 会话
 └── wiki/                      # 知识库规范与初始骨架
     ├── SCHEMA.md
@@ -115,8 +120,10 @@ python3 ~/hermes-kb-engine/scripts/kb_config.py                              # �
 ### 3. 配置 QMD 检索空间
 
 ```bash
-qmd collection add wiki ~/brain/wiki
-qmd collection add raw ~/brain/raw/conversations
+qmd collection add ~/brain/wiki --name wiki
+qmd collection add ~/brain/raw/conversations --name raw
+qmd collection add ~/brain/sources/yuque --name yuque     # 可选：语雀文档（见下文「语雀文档源」）
+qmd context add qmd://yuque "语雀知识库导出的文档（参考资料）"
 qmd mcp --http --daemon        # kb-recall 默认连 http://127.0.0.1:8181/mcp（KB_MCP_URL 可改）
 ```
 
@@ -165,7 +172,21 @@ python3 ~/.hermes/scripts/kb_models.py             # 显示是否就绪
 `kb build` 给**新会话**分配更长的会话 ID（超过 16 位时取前 8 位 + 6 位哈希），避免原来 8 位截断导致的撞车误删；**已收录过的文件沿用当时的来源和会话 ID**（从 `files` / `chunks` 表反查），所以知识库里已有的 `^[kb:来源:会话:序号]` 出处全部继续有效，不需要迁移。
 同一文件只会被收录一次（原来本机 `~/.claude`、`~/.zcode` 会被当成两个来源各扫一遍）；新收录的本机会话记为 `tp-*`、同步来的记为 `mac-*`（前缀可配置）。
 
-### 7. 测试与检查
+### 7. 语雀文档源（可选）
+
+把语雀知识库增量同步成 Markdown，进 QMD「yuque」集合供检索，同时进 `kb.sqlite`（来源 `yuque-doc`，不进提炼队列）。
+
+1. **选导出工具**（二选一）：
+   - [yuque-exporter](https://github.com/Bkm016/yuque-exporter)：下载对应平台的可执行文件放进 PATH（或设 `YUQUE_EXPORTER_BIN`）。在 `~/.config/hermes-kb/env` 里填 `KB_YUQUE_TOOL=yuque-exporter`、`YUQUE_TOKEN`（[语雀 Token](https://www.yuque.com/settings/tokens)，只读权限即可）、`YUQUE_USER`、`YUQUE_REPOS`（空格分隔，留空 = 全部知识库）。增量靠导出目录里的 `.export_records.json`。
+     注意：这个工具只能在命令行传 token，运行期间同机其他用户能在进程列表看到，请在单用户机器上跑。
+   - [Elog](https://github.com/LetTTGACO/elog)：`npm i -g @elog/cli`，在某个目录 `elog init` 生成配置，把输出目录设成 `~/brain/sources/yuque-export`、token 写进 Elog 自己的 env 文件；然后填 `KB_YUQUE_TOOL=elog`、`KB_YUQUE_ELOG_DIR=那个目录`（配置/env 文件名不是默认的 `elog.config.js` / `.elog.env` 时用 `KB_YUQUE_ELOG_CONFIG` / `KB_YUQUE_ELOG_ENV` 指定）。
+2. **同步并清洗**：`bash tools/sync_yuque.sh`（日志 `~/brain/.state/yuque_sync.log`）。夜间流水线 `nightly.sh` 已包含这一步，没配置 `KB_YUQUE_TOOL` 时自动跳过。
+   清洗只改 `~/brain/sources/yuque/` 里自己生成的文件（frontmatter 带 `generator: "hermes-kb/clean_yuque"`），导出目录不动。
+3. **建索引**：`qmd collection add ~/brain/sources/yuque --name yuque`；之后 `qmd_refresh.sh` 每小时会给 yuque 集合补向量。
+4. **接入 Hermes**：kb-recall 在语雀目录存在时自动查 `wiki,yuque`（命中附原文链接）；想让 Hermes 主动查，把 [`docs/hermes-config.example.yaml`](./docs/hermes-config.example.yaml) 里的 `mcp_servers` 片段加进 `~/.hermes/config.yaml`，然后 `/reload-mcp`。
+5. **出处格式**：`^[kb:yuque-doc:文档键:小节序号]`。文档键 = 语雀文档 id（Elog 导出带 frontmatter 时）或「知识库/目录/标题」的哈希；语雀里改了小节顺序，序号会变，写知识页时优先同时给出原文链接。
+
+### 8. 测试与检查
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install "pytest>=8" "shellcheck-py>=0.10"
