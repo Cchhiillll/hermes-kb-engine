@@ -42,8 +42,8 @@ def fed_len(user, reply):
     return u + len(reply or "")
 
 def cited_ids():
-    """知识页（projects/entities/concepts/queries/comparisons）里 ^[kb:段id] 引到的段，区间 a:b:0-10 展开。"""
-    txt = "".join(open(f, errors="ignore").read() for d in ("projects", "entities", "concepts", "queries", "comparisons")
+    """知识页（projects/entities/concepts/queries/comparisons/lessons）里 ^[kb:段id] 引到的段，区间 a:b:0-10 展开。"""
+    txt = "".join(open(f, encoding="utf-8", errors="ignore").read() for d in ("projects", "entities", "concepts", "queries", "comparisons", "lessons")
                   for f in glob.glob(f"{WIKI}/{d}/**/*.md", recursive=True))
     ids = set()
     for x in re.findall(r"kb:([^\]\s,]+)", txt):

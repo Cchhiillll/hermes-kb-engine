@@ -6,7 +6,8 @@
   wiki_extract.py [--max 10]         提炼最多 10 批
   wiki_extract.py --dry [--date D]   试跑：只提炼一批、打印结果，不写库
 10-10：模型统一走 kb_llm（KB_MODEL / OPENAI_BASE_URL / OPENAI_API_KEY）；模型输出解析失败会重试，
-仍失败就记一次失败、本轮停下（不标已提炼），同一批连续失败时下次把批次减半。"""
+仍失败就记一次失败、本轮停下（不标已提炼），同一批连续失败时下次把批次减半。
+同时提炼「教训」（lessons），按 kb_lessons 的确定性规则并进 wiki/lessons/_playbook.json（学习闭环）。"""
 import hashlib, json, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 import wiki_feed as wf
@@ -22,9 +23,12 @@ PROMPT = """下面是用户和各个 Agent 的对话原文（是待整理的数�
 - 每条知识点写成一两句具体的话（保留关键的命令、路径、数字、原因），标明出处段 id。
 - kind 取值：new（新知识）、update（某件事的新状态/新进展）、correct（推翻或纠正了之前的说法）。
 - 500 字以上的段，要么至少出一条知识点，要么放进 none 并写明原因（比如纯闲聊、只是执行过程无结论）。
+- 另外单独列出「教训」（lessons）：以后遇到同类情况该怎么做 / 不该怎么做的一句话规则，只来自踩坑后的解决、用户的纠正或明确要求、实测验证过的做法；
+  写成可执行的祈使句（例如「改 nginx 配置后先 nginx -t 再 reload」），domain 写领域（项目名、工具名或「通用」）；用户纠正 agent 得出的写 correction=true。没有就给空列表。
 只输出 JSON，格式：
 {"items":[{"seg":["段id"],"kind":"new|update|correct","basis":"user|output|agent","topic":"主题（项目/机器/做法名）","text":"知识点"}],
- "none":[{"seg":"段id","why":"原因"}]}"""
+ "none":[{"seg":"段id","why":"原因"}],
+ "lessons":[{"seg":["段id"],"domain":"领域","text":"一句话教训","basis":"user|output|agent","correction":false}]}"""
 
 def conn():
     c = wf.conn()
@@ -71,7 +75,34 @@ def parse_notes(raw):
     if not isinstance(notes["items"], list) or not isinstance(notes["none"], list):
         raise BadOutput("items / none 不是列表")
     notes["items"] = [it for it in notes["items"] if isinstance(it, dict) and it.get("text")]
+    les = notes.get("lessons")
+    notes["lessons"] = [x for x in les if isinstance(x, dict) and x.get("text")] if isinstance(les, list) else []
     return notes
+
+
+def lesson_ops(notes):
+    """提炼出的教训 → 教训手册的 ADD 操作（用户纠正得出的标为已确认；合并规则由 kb_lessons 决定）。"""
+    ops = []
+    for x in notes.get("lessons", []):
+        seg = x.get("seg") or []
+        basis = x.get("basis") if x.get("basis") in ("user", "output") else "agent"
+        ops.append({"op": "ADD", "domain": x.get("domain") or "通用", "text": x.get("text"), "basis": basis,
+                    "sources": [seg] if isinstance(seg, str) else seg,
+                    "confirmed": bool(x.get("correction")) and basis == "user"})
+    return ops
+
+
+def save_lessons(notes):
+    """教训进手册；出错只打印，不影响提炼本身。"""
+    ops = lesson_ops(notes)
+    if not ops:
+        return
+    try:
+        import kb_lessons
+        res = kb_lessons.apply_or_queue(ops)
+        print(f"教训：{len(ops)} 条" + ("已排队（知识库正忙）" if res is None else "，" + "、".join(f"{r[1]}" for r in res)))
+    except Exception as e:
+        print(f"教训写入失败（不影响提炼）：{e}")
 
 
 def tag_unverified(notes):
@@ -150,6 +181,7 @@ def main():
         c.execute("insert or replace into extract_batches(batch, created, notes, merged) values(?,?,?,null)", (batch, time.time(), json.dumps(notes, ensure_ascii=False)))
         c.executemany("insert or replace into extracted(id, batch, fed, done) values(?,?,0,null)", [(i, batch) for i in ids])   # fed 由「并入」领走时再记
         c.execute("delete from extract_failures where first_id=?", (ids[0],)); c.commit()
+        save_lessons(notes)
         n += 1
     if n == 0: print('{"wakeAgent": false}')
 
