@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# 每小时刷新 QMD 混合检索索引与 Wiki 向量
-# 静默运行并记录日志至 ~/brain/.state/qmd_refresh.log
-
-L="${LOG_FILE:-$HOME/brain/.state/qmd_refresh.log}"
+# 每小时刷新 QMD 混合检索索引与 Wiki 向量，并给 wiki 做 Git 快照。
+# 静默运行并记录日志至 $KB_BRAIN_DIR/.state/qmd_refresh.log
+BRAIN="${KB_BRAIN_DIR:-$HOME/brain}"
+QMD="${QMD_BIN:-qmd}"
+L="${LOG_FILE:-$BRAIN/.state/qmd_refresh.log}"
 mkdir -p "$(dirname "$L")"
-LOW="nice -n 19"
+LOW=(nice -n 19)
 
 {
   echo "== $(date '+%F %T') QMD Refresh =="
-  if command -v qmd >/dev/null 2>&1; then
-    $LOW qmd update || true
-    flock -n -E 75 /tmp/qmd_embed.lock $LOW qmd embed -c wiki || true
+  if command -v "$QMD" >/dev/null 2>&1; then
+    "${LOW[@]}" "$QMD" update || true
+    flock -n -E 75 /tmp/qmd_embed.lock "${LOW[@]}" "$QMD" embed -c wiki || true
+  else
+    echo "没有找到 qmd，跳过索引刷新"
   fi
-  # 自动 Wiki Git 快照
-  if [ -d "$HOME/brain/.git" ]; then
-    git -C "$HOME/brain" add wiki
-    if ! git -C "$HOME/brain" diff --cached --quiet -- wiki; then
-      git -C "$HOME/brain" commit -qm "wiki hourly snapshot $(date '+%F %H:%M')" -- wiki || true
+  if [ -d "$BRAIN/.git" ]; then
+    git -C "$BRAIN" add wiki
+    if ! git -C "$BRAIN" diff --cached --quiet -- wiki; then
+      git -C "$BRAIN" commit -qm "wiki hourly snapshot $(date '+%F %H:%M')" -- wiki || true
     fi
   fi
 } >> "$L" 2>&1

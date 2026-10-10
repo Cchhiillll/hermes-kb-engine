@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Hermes 对话知识库引擎：多 Agent 历史对话 → 一问一答切片 → SQLite 全文检索与向量检索。
+"""Hermes 对话知识库引擎：多 Agent 历史对话 → 一问一答切片 → SQLite FTS5 全文检索（向量检索由 QMD 负责）。
 
-生产 1:1 完整实现，自包含所有数据源解析器，不依赖外部未打包模块。
-
-来源支持：
-  1. Mac 远程同步端 (~/mac_agent_sync/)：
-     - Claude Code: ~/.claude/projects/*/*.jsonl
-     - Codex: ~/.codex/sessions/**/rollout-*.jsonl 及 archived_sessions/**/*.jsonl
-     - DSH: ~/.dsh/sessions/**/session*.jsonl.zstd (zstd 深度解压)
-     - Grok: ~/.grok/sessions/**/updates.jsonl
-     - ZCode: Mac 本地命令行会话库快照 (zcode/db.sqlite)
-  2. 本地 Agent 端：
-     - 小火龙 (OpenClaw): ~/.openclaw/agents/main/sessions/*.jsonl* (清洗 message_id 与 agent 前缀)
-     - 佐佐木 (Antigravity): ~/.gemini/antigravity-cli/conversations/*.db (无 schema SQLite 原生 protobuf 线格式解析)
-     - Hermes 本体及多 Profile: ~/.hermes/state.db 及 profiles/*/state.db (飞书/Discord/实时通话)
-     - 工作 Agent: tp-claude, tp-zcode
-  3. 知识库现有页面: ~/brain/wiki/*/*.md
+来源支持（本机读到的记 <local_prefix>-xxx，默认 tp；从另一台机器同步到 MAC_SYNC_DIR 的记 <sync_prefix>-xxx，默认 mac）：
+  - Claude Code: ~/.claude/projects/*/*.jsonl（同步目录：claude/projects）
+  - Codex: ~/.codex/sessions/**/rollout-*.jsonl 及 archived_sessions/**/*.jsonl
+  - DSH: ~/.dsh/sessions/**/session*.jsonl.zstd（需要 zstd 命令）
+  - Grok: ~/.grok/sessions/**/updates.jsonl
+  - ZCode: ~/.zcode/cli/db/db.sqlite（同步目录：zcode/db.sqlite）
+  - OpenClaw: ~/.openclaw/agents/*/sessions/*.jsonl*
+  - Antigravity: ~/.gemini/antigravity-cli/conversations/*.db（protobuf 线格式解析）
+  - Hermes 本体及各 profile: ~/.hermes/state.db、~/.hermes/profiles/*/state.db（渠道见 KB_HERMES_SOURCES / KB_PROFILE_SOURCES）
+  - 知识库现有页面: <wiki>/*/*.md
+路径与开关见 scripts/kb_config.py。
 
 使用方法：
-  kb build [--full] [--no-embed]   增量收录变动会话；--full 全量重建
+  kb build [--full]                增量收录变动会话；--full 全量重建（--no-embed 为兼容旧调用保留，无作用）
   kb search 查询词 [-k 8]          检索一问一答切片
   kb open <id> [--around 2]        查看切片全文及上下文
   kb stats                         查看各来源片段统计
@@ -26,15 +22,29 @@
 import os, re, sys, glob, json, math, time, sqlite3, hashlib, subprocess, datetime as dt
 from urllib.parse import unquote
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (os.path.join(_HERE, "..", "scripts"), os.path.expanduser("~/.hermes/scripts")):
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+import kb_config
+
+CFG = kb_config.load()
 HOME = os.path.expanduser("~")
-DB = os.environ.get("KB_DB_PATH", os.path.expanduser("~/brain/kb/kb.sqlite"))
-SYNC = os.environ.get("MAC_SYNC_DIR", os.path.expanduser("~/mac_agent_sync"))
-ROOT = "/Users/wangyipeng/Documents/文稿 - 王一澎的笔记本电脑/AI Native/"
-RANK = {
-    "page": -1, "mac-claude": 0, "tp-claude": 1, "mac-dsh": 2, "mac-codex": 3,
-    "tp-agy": 4, "tp-openclaw": 5, "tp-hermes": 6, "tp-sylphy": 7, "tp-roxy": 8,
-    "tp-zcode": 9, "mac-grok": 10, "mac-zcode": 11
-}
+DB = CFG.db
+SYNC = CFG.sync_dir
+HERMES = CFG.hermes_home
+WIKI = CFG.wiki_dir
+LOCAL, REMOTE = CFG.local_prefix, CFG.sync_prefix
+# 会话 cwd 在这个目录下时，下一级目录名就是「项目」（10-10：原来写死成本机某个个人目录，改成配置项）
+ROOT = (CFG.project_root.rstrip("/") + "/") if CFG.project_root else ""
+# DSH 把 cwd 编码进目录名（空格写成 ~0020），据此识别项目
+DSH_MARK = (os.path.basename(ROOT.rstrip("/")).replace(" ", "~0020") + "-") if ROOT else ""
+_ORDER = ("claude", "dsh", "codex", "agy", "openclaw", "hermes", "zcode", "grok")
+def rank(src):
+    """收录顺序：页面最先，其余按来源类型（同类内本机在前）。重复片段只保留先收的那份。"""
+    if src == "page": return -1
+    pre, _, fam = src.partition("-")
+    return (_ORDER.index(fam) if fam in _ORDER else len(_ORDER)) * 2 + (0 if pre == REMOTE else 1)
 REPLY_MAX = 12000
 NOISE = ("[Your previous response", "Current runtime context", "No response requested", "<turn_aborted", "[Request interrupted")
 SYS_PREFIX = (
@@ -69,7 +79,7 @@ def cut(s, n):
     return s if len(s) <= n else s[:n] + "…"
 
 def unwrap(t):
-    """佐佐木 (cc-connect) 外壳剥除：真话在最后一个 'User message:' 之后。"""
+    """cc-connect 外壳剥除：真话在最后一个 'User message:' 之后。"""
     if "cc-connect" in t and "User message:" in t:
         t = re.sub(r"^\s*\[cc-connect[^\]]*\]\s*", "", t.rsplit("User message:", 1)[1])
     return t.strip()
@@ -89,8 +99,16 @@ def toks(s):
 
 # ---------------- 各来源解析器 ----------------
 def project_of(cwd):
-    if cwd and cwd.startswith(ROOT): return cwd[len(ROOT):].split("/")[0] or ""
+    if ROOT and cwd and cwd.startswith(ROOT): return cwd[len(ROOT):].split("/")[0] or ""
     return ""
+
+def sid(raw, keep=8):
+    """新会话的会话 ID（10-10）：只留字母数字和连字符；超过 16 位时取前 keep 位 + 6 位哈希。
+    原来只截 8 位，不同会话撞车时 drop_session 会删掉别人的片段。已收录过的会话沿用旧 ID（见 build 里的 known），旧出处不受影响。"""
+    clean = re.sub(r"[^0-9A-Za-z-]", "", str(raw))
+    if clean and len(clean) <= 16:
+        return clean
+    return (clean[:keep] or "s") + "-" + hashlib.sha1(str(raw).encode()).hexdigest()[:6]
 
 def first_cwd(f, key):
     for l in open(f, errors="ignore"):
@@ -145,7 +163,7 @@ def ev_openclaw(f):
         if m.get("role") == "user":
             t = txt(m.get("content")).strip()
             t = re.sub(r"^\[message_id:[^\]]*\]\s*", "", t)
-            t = re.sub(r"^chill:\s*", "", t)
+            if CFG.openclaw_user_prefix: t = re.sub(rf"^{re.escape(CFG.openclaw_user_prefix)}:\s*", "", t)
             if t and not any(t.startswith(p) for p in SYS_PREFIX): yield ts, "user", t
         elif m.get("role") == "assistant" and isinstance(m.get("content"), list):
             for x in m["content"]:
@@ -172,7 +190,7 @@ def ev_dsh(f):
                     a = x.get("arguments") or x.get("input") or {}
                     yield ts, "cmd", str((a.get("command") if isinstance(a, dict) else None) or x.get("name"))
 
-# Antigravity（佐佐木）：SQLite 内 steps.step_payload 原生 protobuf 线格式解析
+# Antigravity：SQLite 内 steps.step_payload 原生 protobuf 线格式解析
 def _pb(b, depth=0):
     i, n = 0, len(b)
     def varint():
@@ -318,101 +336,96 @@ def ev_page(f, topic):
             yield ts, "user", f"【整理页】{topic}｜{title}"
             yield ts, "reply", body
 
+def _stem(f):
+    return os.path.basename(f).split(".")[0]
+
 def sources():
-    """生成所有待收录会话: (来源, 会话, 项目, 文件或键, 修改时间, 事件生成器)"""
+    """生成所有待收录会话: (来源, 会话, 项目, 文件或键, 修改时间, 事件生成器)
+    10-10：同一个文件只产出一次（原来本机 ~/.claude、~/.zcode 被当成两个来源各扫一遍）；
+    本机读到的记 <local_prefix>-xxx，同步目录里的记 <sync_prefix>-xxx。"""
     g = lambda p, r=False: glob.glob(p, recursive=r)
+    roots = ((LOCAL, HOME), (REMOTE, SYNC))
 
-    # 1. 扫描 Claude Code 会话（同时支持本地宿主目录与同步目录）
-    claude_pats = [f"{HOME}/.claude/projects/*/*.jsonl", f"{HOME}/.claude/backups/*/*/*.jsonl",
-                   f"{SYNC}/claude/projects/*/*.jsonl", f"{SYNC}/claude/backups/*/*/*.jsonl"]
-    for pat in claude_pats:
-        for f in g(pat):
-            yield "mac-claude", os.path.basename(f)[:8], project_of(first_cwd(f, "claude")), f, os.path.getmtime(f), lambda f=f: ev_claude(f)
+    # 1. Claude Code
+    for pre, base in roots:
+        pats = ([f"{base}/.claude/projects/*/*.jsonl", f"{base}/.claude/backups/*/*/*.jsonl"] if base == HOME
+                else [f"{base}/claude/projects/*/*.jsonl", f"{base}/claude/backups/*/*/*.jsonl"])
+        for pat in pats:
+            for f in g(pat):
+                yield f"{pre}-claude", sid(_stem(f)), project_of(first_cwd(f, "claude")) or "Claude Code", f, os.path.getmtime(f), lambda f=f: ev_claude(f)
 
-    # 2. 扫描 Codex 会话（同时支持本地宿主目录与同步目录）
-    codex_pats = [f"{HOME}/.codex/sessions/**/rollout-*.jsonl", f"{HOME}/.codex/archived_sessions/**/*.jsonl",
-                  f"{SYNC}/codex/sessions/**/rollout-*.jsonl", f"{SYNC}/codex/archived_sessions/**/*.jsonl"]
-    for pat in codex_pats:
-        for f in g(pat, True):
-            yield "mac-codex", os.path.basename(f)[28:64], project_of(first_cwd(f, "codex")), f, os.path.getmtime(f), lambda f=f: ev_codex(f)
+    # 2. Codex
+    for pre, base in roots:
+        d = f"{base}/.codex" if base == HOME else f"{base}/codex"
+        for pat in (f"{d}/sessions/**/rollout-*.jsonl", f"{d}/archived_sessions/**/*.jsonl"):
+            for f in g(pat, True):
+                yield f"{pre}-codex", sid(os.path.basename(f)[28:64] or _stem(f)), project_of(first_cwd(f, "codex")), f, os.path.getmtime(f), lambda f=f: ev_codex(f)
 
-    # 3. 扫描 DSH 会话（同时支持本地宿主目录与同步目录）
-    dsh_pats = [f"{HOME}/.dsh/sessions/**/session*.jsonl.zstd", f"{SYNC}/dsh/sessions/**/session*.jsonl.zstd"]
-    for pat in dsh_pats:
-        for f in g(pat, True):
+    # 3. DSH（zstd 压缩）
+    for pre, base in roots:
+        d = f"{base}/.dsh/sessions" if base == HOME else f"{base}/dsh/sessions"
+        for f in g(f"{d}/**/session*.jsonl.zstd", True):
             if "session.v2" not in f and os.path.exists(f.replace("session.jsonl.zstd", "session.v2.jsonl.zstd")): continue
-            m = re.search(r"session-([0-9a-f\-]{8})", f); d = os.path.basename(os.path.dirname(os.path.dirname(f)))
-            proj = d.split("AI~0020Native-")[-1].strip("-") if "AI~0020Native-" in d else ""
-            yield "mac-dsh", m.group(1) if m else f[-20:], proj, f, os.path.getmtime(f), lambda f=f: ev_dsh(f)
+            m = re.search(r"session-([0-9a-f\-]{8,})", f); dname = os.path.basename(os.path.dirname(os.path.dirname(f)))
+            proj = dname.split(DSH_MARK)[-1].strip("-") if DSH_MARK and DSH_MARK in dname else ""
+            yield f"{pre}-dsh", sid(m.group(1) if m else f), proj, f, os.path.getmtime(f), lambda f=f: ev_dsh(f)
 
-    # 4. 扫描 Grok 会话（同时支持本地宿主目录与同步目录）
-    grok_pats = [f"{HOME}/.grok/sessions/**/updates.jsonl", f"{SYNC}/grok/**/updates.jsonl"]
-    for pat in grok_pats:
+    # 4. Grok
+    for pre, base in roots:
+        pat = f"{base}/.grok/sessions/**/updates.jsonl" if base == HOME else f"{base}/grok/**/updates.jsonl"
         for f in g(pat, True):
-            sid = os.path.basename(os.path.dirname(f))
+            s_ = os.path.basename(os.path.dirname(f))
             parent = os.path.basename(os.path.dirname(os.path.dirname(f)))
-            yield "mac-grok", sid[:36], project_of(unquote(parent)) or "Grok", f, os.path.getmtime(f), lambda f=f: ev_grok(f)
+            yield f"{pre}-grok", sid(s_), project_of(unquote(parent)) or "Grok", f, os.path.getmtime(f), lambda f=f: ev_grok(f)
 
-    # 5. 扫描 ZCode 会话库（同时支持本地宿主目录与同步目录）
-    zcode_dbs = [f"{HOME}/.zcode/cli/db/db.sqlite", f"{SYNC}/zcode/db.sqlite"]
-    seen_zcode = set()
-    for zdb in zcode_dbs:
+    # 5. ZCode 会话库
+    for pre, zdb in ((LOCAL, f"{HOME}/.zcode/cli/db/db.sqlite"), (REMOTE, f"{SYNC}/zcode/db.sqlite")):
         if not os.path.exists(zdb): continue
         try:
             zc = sqlite3.connect(f"file:{zdb}?mode=ro", uri=True, timeout=10)
-            for sid, directory, updated in zc.execute("select id, directory, time_updated from session"):
-                if sid in seen_zcode: continue
-                seen_zcode.add(sid)
+            for s_, directory, updated in zc.execute("select id, directory, time_updated from session"):
                 mt = float(updated) / 1000.0 if updated and float(updated) > 1e12 else float(updated or 0)
-                short = sid.replace("sess_", "")[:8]
-                yield "mac-zcode", short, project_of(directory or "") or "ZCode", zdb + ":" + sid, mt, lambda db=zdb, sid=sid: ev_zcode(db, sid)
+                yield f"{pre}-zcode", sid(s_.replace("sess_", "")), project_of(directory or "") or "ZCode", zdb + ":" + s_, mt, lambda db=zdb, s_=s_: ev_zcode(db, s_)
         except Exception: pass
 
-    # 2. 本地 Agent 端
-    for f in g(f"{HOME}/.claude/projects/*/*.jsonl"):
-        yield "tp-claude", os.path.basename(f)[:8], "佐佐木/田山", f, os.path.getmtime(f), lambda f=f: ev_claude(f)
+    # 6. Antigravity
     for f in g(f"{HOME}/.gemini/antigravity-cli/conversations/*.db"):
-        yield "tp-agy", os.path.basename(f)[:8], "佐佐木(Antigravity)", f, os.path.getmtime(f), lambda f=f: ev_agy(f)
-    for f in g(f"{HOME}/.openclaw/agents/main/sessions/*.jsonl*"):
+        yield f"{LOCAL}-agy", sid(_stem(f)), "Antigravity", f, os.path.getmtime(f), lambda f=f: ev_agy(f)
+
+    # 7. OpenClaw
+    for f in g(f"{HOME}/.openclaw/agents/*/sessions/*.jsonl*"):
         if ".trajectory" in f or f.endswith(".json"): continue
         agent = f.split("/agents/", 1)[1].split("/", 1)[0]
-        who = {"main": "小火龙(openclaw)", "roxy": "洛琪希(openclaw)"}.get(agent, f"{agent}(openclaw)")
-        yield "tp-openclaw", os.path.basename(f)[:8], who, f, os.path.getmtime(f), lambda f=f: ev_openclaw(f)
+        yield f"{LOCAL}-openclaw", sid(_stem(f)), f"{agent}(openclaw)", f, os.path.getmtime(f), lambda f=f: ev_openclaw(f)
 
-    # 3. Hermes 本体及多 Profile
-    for src, db, names in (("tp-hermes", f"{HOME}/.hermes/state.db", {"feishu": "Hermes(飞书)", "discord": "Hermes(Discord)"}),
-                           ("tp-sylphy", f"{HOME}/.hermes/profiles/sylphy/state.db", {"discord": "希露菲(Discord)"}),
-                           ("tp-roxy", f"{HOME}/.hermes/profiles/roxy/state.db", {"discord": "洛琪希(Discord)"})):
+    # 8. Hermes 本体及各 profile（10-10：profile 自动发现，不再写死名字）
+    dbs = [("hermes", f"{HERMES}/state.db", CFG.hermes_sources, "Hermes")]
+    for pdb in sorted(g(f"{HERMES}/profiles/*/state.db")):
+        prof = os.path.basename(os.path.dirname(pdb))
+        dbs.append((prof, pdb, CFG.profile_sources, prof))
+    for name, db, wanted, label in dbs:
         if not os.path.exists(db): continue
+        names = {s_.strip(): f"{label}({s_.strip()})" for s_ in wanted.split(",") if s_.strip()}
+        src = f"{LOCAL}-" + (re.sub(r"[^a-z]", "", name.lower()) or "profile")
         try:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             keep = {r[0]: (r[1], r[2] or 0) for r in con.execute(
                 "select id, source, last_activity_at from sessions where source in (%s)" % ",".join("?" * len(names)), list(names))}
             hs = hermes_sessions(db)
-            pre = {"tp-hermes": "hermes:", "tp-sylphy": "sylphy:", "tp-roxy": "roxy:"}.get(src, src + ":")
-            for sid, (source, la) in keep.items():
-                if sid in hs: yield src, str(sid)[-8:], names[source], pre + sid, float(la), lambda e=hs[sid]: iter(e)
+            for s_, (source, la) in keep.items():
+                if s_ in hs: yield src, sid(s_), names[source], f"{name}:{s_}", float(la), lambda e=hs[s_]: iter(e)
         except Exception: pass
 
-    # 4. 实时通话
-    for f in g(f"{HOME}/.hermes/profiles/sylphy/voice-live-notes/*.jsonl"):
+    # 9. 实时通话记录（各 profile 的 voice-live-notes）
+    for f in g(f"{HERMES}/profiles/*/voice-live-notes/*.jsonl"):
         mt = os.path.getmtime(f)
         if time.time() - mt < 120: continue
-        yield "tp-sylphy", "call-" + os.path.basename(f)[11:26], "希露菲(实时通话)", f, mt, lambda f=f: ev_voice_live(f)
+        prof = f.split("/profiles/", 1)[1].split("/", 1)[0]
+        src = f"{LOCAL}-" + (re.sub(r"[^a-z]", "", prof.lower()) or "profile")
+        yield src, "call-" + os.path.basename(f)[11:26], f"{prof}(实时通话)", f, mt, lambda f=f: ev_voice_live(f)
 
-    # 5. 本地 ZCode
-    zdb = f"{HOME}/.zcode/cli/db/db.sqlite"
-    if os.path.exists(zdb):
-        try:
-            zc = sqlite3.connect(f"file:{zdb}?mode=ro", uri=True)
-            for sid, updated in zc.execute("select id, time_updated from session"):
-                mt = float(updated) / 1000.0 if updated and float(updated) > 1e12 else float(updated or 0)
-                short = sid.replace("sess_", "")[:8]
-                yield "tp-zcode", short, "ZCode", zdb + ":" + sid, mt, lambda db=zdb, sid=sid: ev_zcode(db, sid)
-        except Exception: pass
-
-    # 6. Wiki 结构化页面
-    for f in g(os.path.expanduser("~/brain/wiki/*/*.md")):
+    # 10. Wiki 结构化页面
+    for f in g(f"{WIKI}/*/*.md"):
         if "/_archive/" in f: continue
         topic = os.path.basename(f)[:-3]
         yield "page", topic, topic, f, os.path.getmtime(f), lambda f=f, topic=topic: ev_page(f, topic)
@@ -456,15 +469,33 @@ def drop_session(c, src, session):
             c.execute("delete from fts_map where rid=?", (r[0],))
     c.execute("delete from chunks where src=? and session=?", (src, session))
 
+def known_identity(c, key, src, session):
+    """已收录过的文件沿用当时的 (来源, 会话 ID)，保证旧的 ^[kb:来源:会话:序号] 出处不失效。
+    旧版本把本机 ~/.claude 同时当 mac-claude 和 tp-claude 扫，files 表里记的来源可能和片段实际来源不一致，
+    所以以 chunks 表里同一会话、同一类来源（后缀相同）的实际来源为准。"""
+    r = c.execute("select src, session from files where key=?", (key,)).fetchone()
+    if not r:
+        return src, session
+    old_src, old_sess = r
+    fam = src.split("-", 1)[-1]
+    hit = c.execute("select src from chunks where session=? and (src=? or src like ?) limit 1",
+                    (old_sess, old_src, f"%-{fam}")).fetchone()
+    return (hit[0] if hit else old_src), old_sess
+
 def build(full=False):
     c = conn()
     if full:
         c.executescript("delete from chunks; insert into fts(fts) values('delete-all'); delete from fts_map; delete from files;")
     seen = {r[0]: r[1] for r in c.execute("select key, mtime from files")}
-    todo = sorted(sources(), key=lambda s: (RANK.get(s[0], 9), s[4]))
+    todo, keys = [], set()
+    for t in sources():
+        if t[3] in keys: continue                     # 同一文件只收一次
+        keys.add(t[3]); todo.append(t)
+    todo.sort(key=lambda s: (rank(s[0]), s[4]))
     added = skipped = sess = 0
     for src, session, project, key, mtime, evf in todo:
         if seen.get(key) == mtime: continue
+        src, session = known_identity(c, key, src, session)
         drop_session(c, src, session); sess += 1
         for seq, ts, user, reply, cmds in exchanges(list(evf())):
             user, reply = redact(user).strip(), redact(reply)

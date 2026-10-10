@@ -1,0 +1,29 @@
+# hermes-kb-engine 配置模板：复制到 ~/.config/hermes-kb/config.toml 后按需修改。
+# 优先级：环境变量 > 本文件 > 默认值。密钥（API Key、Token）不要写在这里，写了也不会被读取。
+
+brain_dir = "~/brain"
+# db = "~/brain/kb/kb.sqlite"
+# wiki_dir = "~/brain/wiki"
+# raw_dir = "~/brain/raw/conversations"
+# sync_dir = "~/mac_agent_sync"
+# hermes_home = "~/.hermes"
+
+# 会话 cwd 落在这个目录下时，取下一级目录名作为「项目」；留空则不识别项目
+project_root = ""
+
+# 来源前缀：本机会话记为 <local_prefix>-claude 等，从另一台机器同步来的记为 <sync_prefix>-claude 等
+local_prefix = "tp"
+sync_prefix = "mac"
+
+# 收录 Hermes 主库 / 各 profile 的哪些渠道（逗号分隔）
+hermes_sources = "feishu,discord"
+profile_sources = "discord"
+
+# OpenClaw 用户消息前缀（如 "名字: "），设置后入库时剥掉
+openclaw_user_prefix = ""
+
+# QMD MCP 服务地址（kb-recall 使用）
+mcp_url = "http://127.0.0.1:8181/mcp"
+
+# 模型（端点与密钥用环境变量 OPENAI_BASE_URL / OPENAI_API_KEY）
+model = ""

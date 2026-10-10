@@ -10,23 +10,25 @@
   - 核对：每个被并掉的页里的出处 kb:段id 必须在新页里都还在，否则拒绝并列出缺的；
   - 收尾：被并掉的页搬进 _archive/merged/，全库 [[旧页]] / [[concepts/旧页|别名]] 改指向新页；记一轮到 wiki_refine_runs。
 
-  wiki_consolidate.py              领一组（有待并入的新对话或读对话批次在跑时让路，同 wiki_target.py）
+  wiki_consolidate.py              领一组（另一路正在起草的页会避开）
   wiki_consolidate.py --peek       只看还剩哪些组、下一组是什么
   wiki_consolidate.py --done <组号> 核对并收尾
-luna 让路闸：入口 wiki_target_luna.py 读现状页的 luna 用量，超线不分活（它 import 本模块的 pick）。
+luna 让路闸：入口 wiki_consolidate_luna.py 读现状页的 luna 用量，超线不分活（它 import 本模块的 pick）。
 """
 import collections, fcntl, glob, hashlib, json, os, re, shutil, sqlite3, sys, time
 
-sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
-W = os.environ.get("WIKI_DIR") or os.path.expanduser("~/brain/wiki")          # 测试时指向副本
-DB = os.environ.get("KB_DB") or os.path.expanduser("~/brain/kb/kb.sqlite")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+import kb_config
+_CFG = kb_config.load()
+W = _CFG.wiki_dir          # KB_WIKI_DIR（兼容旧名 WIKI_DIR），测试时指向副本
+DB = _CFG.db               # KB_DB（兼容旧名 KB_DB_PATH）
 REC_ENV = os.environ.get("CONSOLIDATE_REC")    # 测试时指定；正式运行每组一个记录文件（10-04：4 路共用一个「先清空再写」的文件，交卷互相读错）
 def rec_path(gid):
     if REC_ENV and os.path.isdir(REC_ENV):
         return os.path.join(REC_ENV, f"consolidate-{gid}.log.md")
-    return REC_ENV or os.path.expanduser(f"~/brain/kb/batches/consolidate-{gid}.log.md")
-PLAN_FILE = os.environ.get("CONSOLIDATE_PLAN") or os.path.expanduser("~/brain/kb/consolidate_plan.json")   # 没有归宿页的碎页，由 Hermes 提的分组方案（脚本校验后才用）
-STAGE = os.environ.get("KB_STAGE") or os.path.expanduser("~/brain/kb/staging")   # 10-04：起草在暂存区并行，提交时拿锁、核对没被别人改过再替换进知识库
+    return REC_ENV or os.path.join(_CFG.batch_dir, f"consolidate-{gid}.log.md")
+PLAN_FILE = os.environ.get("CONSOLIDATE_PLAN") or os.path.join(os.path.dirname(_CFG.db), "consolidate_plan.json")   # 没有归宿页的碎页，由 Hermes 提的分组方案（脚本校验后才用）
+STAGE = _CFG.stage_dir   # 10-04：起草在暂存区并行，提交时拿锁、核对没被别人改过再替换进知识库
 COMMIT_WAIT = int(os.environ.get("KB_COMMIT_WAIT") or 15 * 60)                 # 提交时等锁最多多久（并入一轮可能占锁几分钟）
 import kb_lock
 LOG = os.path.join(W, "log.md")
@@ -137,7 +139,7 @@ MAX_FAILS, RETRY_AFTER = 3, 86400   # 10-05 审查：超时/掐断才算失败�
 
 
 def fail(c, gid, why):
-    """记一次失败；到 MAX_FAILS 时发一张飞书提醒（只发这一次）。"""
+    """记一次失败（满 MAX_FAILS 次后 skipped() 会跳过 24 小时）。只记库、不发通知：内部调度自愈，不打扰用户。"""
     c.execute("update wiki_consolidate set fails=coalesce(fails,0)+1, fail_ts=?, leased=0 where gid=?", (time.time(), gid)); c.commit()
     n = c.execute("select fails, key from wiki_consolidate where gid=?", (gid,)).fetchone()
     # 内部调度自愈逻辑，静默记入 DB 和日志，严禁因“不用你做什么”给用户发飞书卡片骚扰

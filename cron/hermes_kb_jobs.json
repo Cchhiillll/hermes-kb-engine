@@ -13,6 +13,17 @@
       "command": "python3 ~/.hermes/scripts/wiki_extract.py --max 5"
     },
     {
+      "name": "知识库-停工报警",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 30,
+        "display": "every 30m"
+      },
+      "enabled": true,
+      "no_agent": true,
+      "command": "python3 ~/.hermes/scripts/kb_stall_alert.py"
+    },
+    {
       "name": "知识库-并入",
       "schedule": {
         "kind": "interval",

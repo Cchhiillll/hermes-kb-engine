@@ -3,19 +3,37 @@
 每轮对话前：①问的是"现在/还剩/进度"这类现状问题时，附上现状页 ~/brain/kb/now.md（脚本每 15 分钟实测）；
 ②从 Hermes 自己的知识库（~/brain/wiki）里找出最相关的几页，附上标题、一句话摘要和路径。
 
-- 只在飞书（和命令行测试）对话里生效；定时任务不加。
+- 只在 KB_RECALL_PLATFORMS 列出的平台生效（默认飞书和命令行）；定时任务不加。
+- QMD 地址 KB_MCP_URL、检索集合 KB_RECALL_COLLECTIONS（默认 wiki）均可配置。
 - 查法：关键词 + 语义两路、关掉本地重排（rerank:false），检索仅需 1~2 秒。
 - 查不到、超时、出错都静默跳过，不影响对话。
 """
-import json, os, re, time, urllib.request, logging
+import json, os, re, sys, time, urllib.request, logging
 
 log = logging.getLogger("kb-recall")
-MCP = "http://127.0.0.1:8181/mcp"
-WIKI = os.path.expanduser("~/brain/wiki")
-PLATFORMS = {"feishu", "cli"}
+
+
+def _cfg():
+    """10-10：路径和地址可配置。能 import 到 kb_config（~/.hermes/scripts 或仓库 scripts/）就用它，否则只看环境变量。"""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for p in (os.path.join(here, "..", "..", "scripts"), os.path.expanduser("~/.hermes/scripts")):
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.append(p)
+    try:
+        import kb_config
+        c = kb_config.load()
+        return c.mcp_url, c.wiki_dir, c.now_file
+    except Exception:
+        return (os.environ.get("KB_MCP_URL", "http://127.0.0.1:8181/mcp"),
+                os.path.expanduser(os.environ.get("KB_WIKI_DIR", "~/brain/wiki")),
+                os.path.expanduser(os.environ.get("KB_NOW_FILE", "~/brain/kb/now.md")))
+
+
+MCP, WIKI, NOW = _cfg()
+PLATFORMS = {p.strip() for p in os.environ.get("KB_RECALL_PLATFORMS", "feishu,cli").split(",") if p.strip()}
+COLLECTIONS = [c.strip() for c in os.environ.get("KB_RECALL_COLLECTIONS", "wiki").split(",") if c.strip()]
 SKIP_FILES = re.compile(r"(^|/)(index\.md|log[^/]*\.md|SCHEMA\.md)$|/_meta/|/_archive/")
 TOP, MIN_SCORE, TIMEOUT = 4, 0.3, 4
-NOW = os.path.expanduser("~/brain/kb/now.md")
 STATUS_Q = re.compile(r"现在|目前|当前|还剩|剩多少|额度|进度|状态|在跑|跑着|通不通|正常吗|正常不|挂了|好了没|多少了|怎么样了|最近在|在做什么|在忙|还活着|出错|报错|卡住|停了")
 
 
@@ -43,7 +61,7 @@ def _search(text):
     _post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
     _, body = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "query", "arguments": {
         "searches": [{"type": "lex", "query": text}, {"type": "vec", "query": text}],
-        "limit": TOP + 3, "rerank": False, "collections": ["wiki"]}}}, sid)
+        "limit": TOP + 3, "rerank": False, "collections": COLLECTIONS}}}, sid)
     data = json.loads(body.split("data: ", 1)[1] if body.startswith("event:") else body)
     return (data.get("result", {}).get("structuredContent") or {}).get("results", [])
 

@@ -16,9 +16,12 @@
   kb_lock.py wait 名字 秒数 [--pid 进程号] [--work 说明]               等到拿到锁（给每晚 nightly 用），超时退出码 1
 """
 import datetime as dt, fcntl, json, os, sqlite3, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kb_config
 
-LOCK = os.environ.get("KB_LOCK") or os.path.expanduser("~/brain/kb/write.lock")
-EXEC_DB = os.path.expanduser("~/.hermes/cron/executions.db")
+_CFG = kb_config.load()
+LOCK = _CFG.lock_file
+EXEC_DB = os.path.join(_CFG.hermes_home, "cron", "executions.db")
 MAX_HOLD = 90 * 60
 
 
@@ -29,7 +32,7 @@ def _read():
         return None
 
 
-JOBS = os.path.expanduser("~/.hermes/cron/jobs.json")
+JOBS = os.path.join(_CFG.hermes_home, "cron", "jobs.json")
 
 
 def _jobs_for_script(script):

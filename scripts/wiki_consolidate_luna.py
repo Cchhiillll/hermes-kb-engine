@@ -2,11 +2,12 @@
 """「知识库-深加工」（luna）收敛分活入口（10-04 起换成 wiki_consolidate）；原，10-03 用户批：加一路 luna 深加工，试一天后和 Gemini 那路比产出。
 luna 也负责每天把新对话并入知识库，所以这里设闸：现状页（now.md，每 15 分钟实测）里 luna 的
 5 小时窗口用到 LIMIT_5H% 或本周用到 LIMIT_WEEK%，就让路（不分活、不调模型）；读不到用量也让路。
-其余和 wiki_target.py 完全一样（同一张租约表，两路不会领到同一页）。--done 仍用 wiki_target.py。"""
+其余和 wiki_consolidate.py 完全一样（同一张租约表，两路不会领到同一页）。--done 用 wiki_consolidate.py。"""
 import json, os, re, sys
 
-sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
-NOW = os.path.expanduser("~/brain/kb/now.md")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+import kb_config
+NOW = kb_config.load().now_file
 LIMIT_5H, LIMIT_WEEK = 60, 65   # 10-05：周线 50→65，Grok 分担后 luna 这路多跑一段，留 35% 给 10-10 前的日常任务
 
 
