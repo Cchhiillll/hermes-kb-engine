@@ -3,13 +3,12 @@
 由它逐条并进已有页面（更新/更正/新建），记录写进 batches/批次号.log.md（无可记的段已预填），最后 wiki_feed.py --done。
 深加工正在改页面时不分活；多路并入各领各的批（正在并入的批不再发）；没有待并入的就不叫醒模型。"""
 import json, os, sys, time
-sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 import wiki_feed as wf
 import glob, kb_lock
 
 def main(gate=True):
-    """gate=True：检查是否有可用模型。无论主力是 custom、grok、luna 还是 gemini，只要有可用模型就领活。
-    都不能用时优雅让路休眠，共用写入锁，不会同时改知识库。"""
+    """gate=True：检查 KB_MODEL / OPENAI_BASE_URL 是否配好（kb_models.pick）。没配好就让路，不叫醒模型；共用写入锁，不会同时改知识库。"""
     if gate:
         import kb_models
         name, _, _, why = kb_models.pick()
@@ -40,7 +39,7 @@ def main(gate=True):
     rec = f"{wf.BATCH_DIR}/{batch}.log.md"
     open(rec, "w").write("".join(f"- 无可记：{n.get('seg')}（{n.get('why', '')}）\n" for n in none))
     c.execute("update extracted set fed=? where batch=?", (now, batch)); c.commit()
-    W = os.path.expanduser("~/brain/wiki")      # 记下领活时已有哪些页，交卷时找出本批新开的页做检查
+    W = wf.WIKI      # 记下领活时已有哪些页，交卷时找出本批新开的页做检查
     json.dump(sorted(f[len(W) + 1:-3] for d in ("concepts", "projects", "entities", "queries") for f in glob.glob(f"{W}/{d}/*.md")),
               open(f"{wf.BATCH_DIR}/{batch}.pages.json", "w"), ensure_ascii=False)
     print(f"批次号：{batch}（并入，{len(items)} 条知识点）")

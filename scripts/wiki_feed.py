@@ -11,18 +11,31 @@ history：先送补漏批（已读但知识页没出处的 500 字以上段，�
 不是用户本人的对话不送：Codex 自动审批子会话（问是重复喂的历史，答是 allow/deny 判定）整段跳过，也不计入总段数；
 系统注入的技能/指令说明，user 部分换成一句占位，agent 回复照常送。"""
 import os, sys, time, sqlite3, hashlib, glob, re, json, datetime as dt
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kb_config
 
-DB = os.path.expanduser("~/brain/kb/kb.sqlite")
-BATCH_DIR = os.path.expanduser("~/brain/kb/batches")
+CFG = kb_config.load()
+DB = CFG.db
+BATCH_DIR = CFG.batch_dir
 USER_MAX = 20000            # 用户贴的超长日志：保留开头 15000 + 结尾 5000（agent 回复在入库时已限 12000）
 # 不送、不计数的段（Codex 自动审批子会话）。done_notice.py 也用这个口径判断"全部读完"。
-SKIP = "coalesce(user, '') not like 'The following is the Codex agent history%'"
+SKIP = f"coalesce(user, '') not like 'The following is the Codex agent history%' and {kb_config.non_conversation_sql()}"
 INJECTED = ("Base directory for this skill:", "# Instructions (read first)", "## Referenced chats with Codex:",
             "# MCP app context:", "# Update Config Skill")
 INJECTED_NOTE = "（系统注入的技能/指令说明，已省略）"
 
 MIN_SEG = 500               # 漏读闸门：送出时 500 字以上的段，标已读前必须在知识页里有出处，或在本批 log 里写明"无可记"
-WIKI = os.path.expanduser("~/brain/wiki")
+WIKI = CFG.wiki_dir
+SEG_ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*:[0-9A-Za-z_\-]+:\d+")   # 段 id：来源:会话:序号
+
+
+def skip_ids(text):
+    """记录里「无可记」行列出的段 id（10-10：原来用整段字符串做子串判断，x:1 会被 x:12 那行误放行）。"""
+    out = set()
+    for line in (text or "").splitlines():
+        if "无可记" in line:
+            out.update(SEG_ID.findall(line))
+    return out
 
 def fed_len(user, reply):
     u = 20 if (user or "").lstrip().startswith(INJECTED) else min(len(user or ""), USER_MAX)
@@ -80,7 +93,7 @@ def select_batch(c, mode, budget):
         if used >= budget * 0.9: break
     return ids, out, used
 
-STATE_DB = os.path.expanduser("~/.hermes/state.db")
+STATE_DB = os.path.join(CFG.hermes_home, "state.db")
 
 def busy_batches(c):
     """还在读的批次：发出不到 10 分钟（会话可能还没建），或领走它的 Hermes 会话没结束且 20 分钟内有动静。
@@ -91,6 +104,8 @@ def busy_batches(c):
                      "union all select batch, fed from extracted where done is null and fed > ?) group by batch",
                      (now - 6 * 3600, now - 6 * 3600, now - 6 * 3600)).fetchall()
     if not cand: return busy
+    if not os.path.exists(STATE_DB):          # 10-10：没有 Hermes 会话库（测试/别的机器）时只按发出时间判断，不再报错
+        return {b for b, fed in cand if fed > now - 600}
     st = sqlite3.connect(f"file:{STATE_DB}?mode=ro", uri=True)
     open_s = [sid for (sid,) in st.execute("select id from sessions where id like 'cron_%' and ended_at is null and last_activity_at > ?", (now - 1200,))]
     for b, fed in cand:
@@ -160,7 +175,7 @@ SUFFIX = re.compile(r"(规程|规范|铁律|准则|红线|守则)$")
 
 def new_page_problems(batch):
     """10-04：说明里写了「项目自己的做法写进项目页、页名不加规程」，但 10-04 凌晨照样新开了 9 张「××规程」页，光靠说明管不住，交卷时查。"""
-    W = os.path.expanduser("~/brain/wiki"); f = f"{BATCH_DIR}/{batch}.pages.json"
+    W = WIKI; f = f"{BATCH_DIR}/{batch}.pages.json"
     if not os.path.exists(f):
         return []
     before = set(json.load(open(f)))
@@ -180,7 +195,7 @@ def new_page_problems(batch):
 
 def done(batch):
     import fcntl
-    LOG = os.path.expanduser("~/brain/wiki/log.md"); REC = f"{BATCH_DIR}/{batch}.log.md"
+    LOG = os.path.join(WIKI, "log.md"); REC = f"{BATCH_DIR}/{batch}.log.md"
     log = open(LOG).read()
     rec = open(REC).read().strip() if os.path.exists(REC) else None
     if rec is None and f"| {batch}" not in log:
@@ -189,7 +204,7 @@ def done(batch):
     c = conn()
     m = re.search(rf"^##[^\n]*\| {batch}\b.*?(?=^## |\Z)", log, re.S | re.M)
     table = {"g": "gap_read", "x": "extracted"}.get(batch[0], "hermes_read")
-    skip = " ".join(l for l in (rec if rec is not None else (m.group(0) if m else "")).splitlines() if "无可记" in l)
+    skip = skip_ids(rec if rec is not None else (m.group(0) if m else ""))
     cited = cited_ids()
     rows = c.execute(f"select k.id, k.user, k.reply from {table} h join chunks k on k.id = h.id where h.batch=? and h.done is null", (batch,)).fetchall()
     miss = [i for i, u, r in rows if fed_len(u, r) >= MIN_SEG and i not in cited and i not in skip]
@@ -225,7 +240,7 @@ def done(batch):
 
 def stats():
     d, total = progress(conn())
-    print(f"Hermes 已读 {d}/{total} 段对话（{d / total:.1%}）")
+    print(f"Hermes 已读 {d}/{total} 段对话（{d / max(total, 1):.1%}）")
 
 if __name__ == "__main__":
     a = sys.argv[1:]
