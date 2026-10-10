@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 每天 03:00：同步会话 → 切片入库 → 导出原始层 → QMD 索引 → Git 快照。
+# 每天 03:00：同步会话 / 语雀 → 切片入库 → 导出原始层 → QMD 索引 → Git 快照。
 # 10-10：组件按仓库位置定位（不再假设脚本被拷到 ~/brain/kb、~/brain/tools）；任何一步失败或缺组件，最后以非 0 退出，
 #        不再「找不到就静默跳过、照样返回成功」。
 set -uo pipefail
@@ -31,7 +31,10 @@ log "===== $(date '+%F %T') nightly（KB_HOME=$KB_HOME）====="
 # 1. 从另一台机器增量同步原始会话（没配置 MAC_USER/MAC_HOSTS 时脚本自己跳过）
 need "$KB_HOME/tools/sync_mac.sh" && step "sync_mac" bash "$KB_HOME/tools/sync_mac.sh"
 
-# 2. 会话切片入库
+# 1b. 语雀增量同步 + 清洗（没配置 KB_YUQUE_TOOL 时脚本自己跳过）
+need "$KB_HOME/tools/sync_yuque.sh" && step "sync_yuque" bash "$KB_HOME/tools/sync_yuque.sh"
+
+# 2. 会话切片入库（含语雀文档，来源 yuque-doc）
 need "$KB_HOME/kb/kb.py" && step "kb build" "$PY" "$KB_HOME/kb/kb.py" build
 
 # 3. 导出原始 Markdown 层
