@@ -80,6 +80,37 @@ def _search(text, collections=None):
         return _query(text, cols[:1])
 
 
+LESSON = re.compile(r"^- \[(L-[0-9a-f]{8})\] (.+?)(?: 👍\d+ 👎\d+.*)?$")
+
+
+def _bigrams(s):
+    s = (s or "").lower()
+    out = set(re.findall(r"[a-z0-9_./\-]{2,}", s))
+    for run in re.findall(r"[\u4e00-\u9fff]+", s):
+        out.update(run[i:i + 2] for i in range(max(len(run) - 1, 1)))
+    return out
+
+
+def _lessons(rel, msg, k=3):
+    """教训页命中时，挑出和这句话最相关的几条（只看「稳定」和「草稿」两节），返回 [(id, 文本, 是否草稿)]。"""
+    try:
+        text = open(os.path.join(WIKI, rel), encoding="utf-8").read()
+    except OSError:
+        return []
+    q, sec, cand = _bigrams(msg), "", []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            sec = line[3:]
+            continue
+        m = LESSON.match(line)
+        if m and sec in ("稳定", "草稿（未核实）"):
+            body = re.sub(r"\s*\^\[kb:[^\]]+\]", "", m.group(2)).strip()
+            score = len(q & _bigrams(body))
+            if score:
+                cand.append((-score, sec != "稳定", m.group(1), body))
+    return [(i, b, d) for _, d, i, b in sorted(cand)[:k]]
+
+
 def _log_hit(platform, msg, cols, shown, kw):
     """命中日志（JSONL）：只记消息的哈希和前 60 字，供学习闭环统计哪些页/教训被用过。写失败静默。"""
     try:
@@ -88,7 +119,7 @@ def _log_hit(platform, msg, cols, shown, kw):
             os.replace(HITLOG, HITLOG + ".1")
         rec = {"ts": round(time.time(), 3), "platform": platform, "session": kw.get("session_id") or kw.get("session") or "",
                "msg_sha1": hashlib.sha1(msg.encode()).hexdigest()[:16], "q": msg[:60], "collections": cols,
-               "hits": shown}
+               "hits": shown, "lessons": [x for h in shown for x in h.get("lessons", [])]}
         with open(HITLOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
@@ -152,7 +183,14 @@ def recall(user_message="", platform=None, **kw):
             continue
         title, summ, upd, url = _page(rel, ROOTS[coll])
         shown.append({"file": f"{coll}/{rel}", "score": round(h.get("score") or 0, 3)})
-        if coll == "raw":
+        if coll == "wiki" and rel.startswith("lessons/"):
+            les = _lessons(rel, msg)
+            if not les:
+                shown.pop(); continue
+            shown[-1]["lessons"] = [i for i, _, _ in les]
+            lines.append(f"- 《{title or rel}》（{rel}）里和这句话相关的教训：" + "".join(
+                f"\n  - [{i}] {b}" + ("（草稿，未核实）" if d else "") for i, b, d in les))
+        elif coll == "raw":
             lines.append(f"- 〔原始对话〕{rel}：{summ}")
         elif coll == "yuque":
             lines.append(f"- 〔语雀〕《{title or h.get('title') or rel}》（yuque/{rel}，语雀更新于 {upd or '不详'}"

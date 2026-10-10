@@ -87,7 +87,7 @@
       "skills": [
         "llm-wiki"
       ],
-      "prompt": "你在养你自己的知识库（~/brain/wiki，按 llm-wiki 技能和 SCHEMA.md 的规范）。做一次每周体检并汇报成长：\n1. 按 llm-wiki 的 Lint 检查：孤立页、断链、缺 frontmatter、互相矛盾、明显过时、该开页却没开的高频实体、index 分区是否需要再分、_meta/map.md 是否 ≤30 行且和实际一致。能修的直接修，写进 log.md（## [日期] lint | 每周体检）。\n2. 运行 python3 ~/.hermes/scripts/wiki_feed.py --stats 看读了多少历史对话。\n3. 统计这 7 天 log.md 的变化：新开了哪些页、更新了哪些、现在总页数。\n4. 读 ~/brain/kb/selfcheck.md（每晚自查）和 ~/brain/kb/improve.md（每天对外学习）：这 7 天被纠正/不满、返工、超过 3 分钟的次数，和前 7 天比是多了还是少了；换上了哪些更好的做法、效果如何。这是周报最重要的部分，用数字说。"
+      "prompt": "你在养你自己的知识库（~/brain/wiki，按 llm-wiki 技能和 SCHEMA.md 的规范）。做一次每周体检并汇报成长：\n1. 按 llm-wiki 的 Lint 检查：孤立页、断链、缺 frontmatter、互相矛盾、明显过时、该开页却没开的高频实体、index 分区是否需要再分、_meta/map.md 是否 ≤30 行且和实际一致。能修的直接修，写进 log.md（## [日期] lint | 每周体检）。\n2. 运行 python3 ~/.hermes/scripts/wiki_feed.py --stats 看读了多少历史对话。\n3. 统计这 7 天 log.md 的变化：新开了哪些页、更新了哪些、现在总页数。\n4. 读 ~/brain/kb/selfcheck.md（每晚自查）和 ~/brain/kb/improve.md（每天对外学习）：这 7 天被纠正/不满、返工、超过 3 分钟的次数，和前 7 天比是多了还是少了；换上了哪些更好的做法、效果如何。这是周报最重要的部分，用数字说。\n5. 学习闭环：运行 python3 ~/.hermes/scripts/kb_lessons.py stats，汇报这 7 天教训的新增、升级为稳定、被纠正（👎）和退役各多少，列出 👎 最多的几条；读 ~/brain/kb/eval/last.json 汇报检索评测 pass@5 / MRR 和上次比的变化（退步时教训升级会暂停）。"
     },
     {
       "name": "知识库-检索评测",
@@ -99,6 +99,44 @@
       "enabled": true,
       "no_agent": true,
       "command": "python3 ~/.hermes/scripts/kb_eval.py"
+    },
+    {
+      "name": "知识库-教训反馈",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 60,
+        "display": "every 60m"
+      },
+      "enabled": true,
+      "no_agent": true,
+      "command": "python3 ~/.hermes/scripts/kb_lessons.py maintain"
+    },
+    {
+      "name": "知识库-技能复盘",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 4 * * *",
+        "display": "0 4 * * *"
+      },
+      "enabled": true,
+      "no_agent": false,
+      "script": "skill_review_feed.py",
+      "prompt": "你在复盘自己昨天顺利做完的多步操作，把可复用的做法沉淀成技能。上面给了批次号、材料文件和记录文件；如果是 NO_TARGET，直接结束。否则：\n1. 用 read_file 读完材料文件：现有技能清单、60 天没用到的技能（启发式）、昨天的会话（命令和结果）。\n2. 对每个会话判断：这是不是以后还会重复做的流程？是的话，已有相近技能就用 skill_manage 的 patch 补上新步骤、坑和验证方法；没有就用 skill_manage 的 create 新建（名字用动作+对象，写清触发条件、步骤、验证、回滚）。一次性的操作不建技能。\n3. 值得长期记住的用户偏好，用 memory 工具写（会进待审区）。\n4. 技能和记忆的写入都会进 ~/.hermes/pending/ 等用户确认，不要绕过审批直接改文件，也不要删技能（60 天没用到的只在记录里列出建议）。\n5. 在记录文件里写：新建/修补了哪些技能、提交了哪些记忆、建议合并或退役的技能；没东西可做就写「无可做：原因」。\n6. 最后运行：python3 ~/.hermes/scripts/skill_review_feed.py --done 批次号"
+    },
+    {
+      "name": "知识库-语雀摘要",
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 5 * * *",
+        "display": "30 5 * * *"
+      },
+      "enabled": true,
+      "no_agent": false,
+      "script": "yuque_digest.py",
+      "skills": [
+        "llm-wiki"
+      ],
+      "prompt": "你在把语雀文档挂到自己的知识库（~/brain/wiki，按 llm-wiki 技能和 SCHEMA.md）。上面给了批次号、材料文件和记录文件；如果是 NO_TARGET，直接结束。否则：\n1. 读材料文件：每篇是新增或改过的语雀文档，列了标题、文档键、原文链接和各小节开头（带出处段 id）。\n2. 每篇用 qmd query \"主题\" -c wiki 找到最相关的项目/实体/概念页，在该页「## 相关语雀文档」一节（没有就建）加一行或更新已有那行：- 《标题》（语雀，更新于 日期）：一句话说明它讲什么、什么时候该去看 [原文](链接) ^[kb:yuque-doc:文档键:小节]。\n3. 只写摘要条目，不把语雀原文搬进 wiki、不改写原文；和页里现有说法矛盾的，在记录里指出，不要自己判断谁对。\n4. 只用 patch 做局部修改。确实找不到相关页面的，在记录文件写「- 无可记：文档键（原因）」。\n5. 最后运行：python3 ~/.hermes/scripts/yuque_digest.py --done 批次号（被拒绝时按提示补齐再运行）。"
     }
   ]
 }

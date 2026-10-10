@@ -56,15 +56,18 @@ hermes-kb-engine/
 │   ├── kb_llm.py              # 唯一的模型调用口（OpenAI 兼容端点）
 │   ├── kb_models.py           # 模型是否就绪（没配好就让路）
 │   ├── kb_eval.py             # 检索评测（pass@k / MRR，退步报警）
+│   ├── kb_lessons.py          # 学习闭环：教训手册（确定性合并、👍/👎 反馈、升级与衰减、渲染）
 │   ├── kb_lock.py             # 知识库单写入锁
 │   ├── kb_stall_alert.py      # 积压停工报警
 │   ├── qmd_refresh.sh         # 每小时 QMD 增量刷新 + wiki Git 快照
+│   ├── skill_review_feed.py   # 学习闭环：每日技能复盘送料（要求 Hermes 写入审批已开启）
 │   ├── wiki_feed.py           # 送料 / 交卷闸门（出处、无可记、新页命名）
 │   ├── wiki_extract.py        # 第一步：纯文本批量提炼（解析容错、失败减半）
 │   ├── wiki_merge_feed.py     # 第二步：排他锁出料，交给 Hermes 并入
 │   ├── wiki_consolidate.py    # 碎页合并 / 大页重整 + 70% 门禁
 │   ├── wiki_consolidate_grok.py / wiki_consolidate_luna.py  # 旧的按额度分路入口（可选）
-│   └── wiki_housekeep.py      # index.md / _meta/map.md / log.md 轮换（不调模型）
+│   ├── wiki_housekeep.py      # index.md / _meta/map.md / log.md 轮换（不调模型）
+│   └── yuque_digest.py        # 语雀 → Wiki 交叉引用（只为新增/改过的文档挂摘要条目）
 ├── eval/
 │   └── golden.example.jsonl   # 检索评测集格式示例
 ├── docs/
@@ -170,6 +173,9 @@ python3 ~/.hermes/scripts/kb_models.py             # 显示是否就绪
 - **每 4 小时**：运行 `wiki_consolidate.py` 进行碎页合并与大页四段式重整（70% 具体项保留门禁）。
 - **每日凌晨 03:00**：执行 `tools/nightly.sh`，完成会话同步、语雀同步（配置了才跑）、增量分块（`kb build`）、原始层导出、QMD 索引更新与 Git 自动备份；任何一步失败都会以非 0 退出并写入 `~/brain/.state/nightly.log`。
 - **每周日 20:30**：运行 `kb_eval.py` 跑检索评测（见下文），退步时以退出码 2 结束。
+- **每小时**：`kb_lessons.py maintain`（教训反馈、衰减、升级、渲染，不调模型）。
+- **每日 04:00**：技能复盘（`skill_review_feed.py` 送料，Hermes 用 `skill_manage` 提交，进待审区）。
+- **每日 05:30**：语雀摘要（`yuque_digest.py` 送料，Hermes 在相关 wiki 页挂「相关语雀文档」条目）。
 
 ### 6. 会话 ID 与旧出处兼容
 
@@ -197,7 +203,26 @@ python3 ~/.hermes/scripts/kb_models.py             # 显示是否就绪
 - **评测集**：在 `~/brain/kb/eval/golden.jsonl` 写 20~50 条「问题 → 期望命中」（格式见 [`eval/golden.example.jsonl`](./eval/golden.example.jsonl)：文件写成 `集合/相对路径`，也可以写 kb 段 id 配 `"backend": "kb"`）。
 - **跑评测**：`python3 scripts/kb_eval.py [--backend qmd|kb]`，输出 pass@1 / pass@5 / pass@10 与 MRR、没命中的题和它们的前几名；结果写 `~/brain/kb/eval/last.json`，历史追加到 `history.jsonl`。pass@5 比上次同一评测集低超过 `KB_EVAL_TOLERANCE`（默认 0.05）记为退步、退出码 2。
 
-### 9. 测试与检查
+### 9. 学习闭环（教训 · 技能 · 反馈）
+
+让知识库不只「记下发生了什么」，还从踩坑和纠正里学到「以后该怎么做」，并根据实际效果自我修正（思路参考 ACE、Reflexion、ExpeL、Voyager）。
+
+1. **教训手册**（`wiki/lessons/`）：提炼步骤（`wiki_extract.py`）除了知识点，还输出「教训」——以后遇到同类情况该怎么做 / 不该怎么做的一句话规则，带出处段 id。
+   模型只提议 `ADD / UPDATE / REMOVE`，由 `kb_lessons.py` 按固定规则合并进 `wiki/lessons/_playbook.json`（唯一真相），再渲染成每个领域一页：
+   - 相似度 ≥0.8 的同领域条目合并出处；相似但说法相反的两条标「冲突」，不升级，等人处理；没有出处的直接拒绝；
+   - 稳定条目只接受用户或实测依据的修改；删除是软删除（进「历史」）；每领域最多 50 条在用条目（`KB_LESSONS_MAX`）。
+2. **草稿 → 稳定**：满足其一且无冲突——用户纠正得出 / 用户确认；≥2 个不同会话的出处且依据含用户或实测；被判有用 ≥2 次且从没被判有害。
+   **只有 agent 自己说法的永远停在草稿**；最近一次检索评测退步时暂停升级。
+3. **反馈**：kb-recall 命中教训页时，只把和这句话最相关的 1~3 条注入（草稿标「未核实」），并在命中日志里记下教训 id；
+   `kb_lessons.py maintain`（每小时）去 Hermes 会话库看用户的下一句话：纠正（不对/错了/不行…）记 👎，肯定（好了/可以了/谢谢…）记 👍。
+4. **衰减**：👎≥2 且多于 👍——稳定的降回草稿、草稿退役；没确认的草稿 90 天没被用到——退役。
+5. **技能复盘**（每天 04:00）：`skill_review_feed.py` 挑昨天「命令调用 ≥5 次且用户没纠正」的会话和现有技能清单，交给 Hermes 用自带的 `skill_manage` 新建或修补技能，偏好用 memory 工具记。
+   **前提**：`~/.hermes/config.yaml` 里 `skills.write_approval: true` 和 `memory.write_approval: true`（见 `docs/hermes-config.example.yaml`）——写入先进 `~/.hermes/pending/`，你确认后才生效；没开审批时这个任务直接不分活。
+6. **语雀摘要**（每天 05:30）：`yuque_digest.py` 只为新增 / 改过的语雀文档派活，让 Hermes 在最相关的 wiki 页「## 相关语雀文档」挂一行摘要 + 原文链接 + 出处；交卷时逐篇核对出处或「无可记」。
+
+常用命令：`python3 scripts/kb_lessons.py stats`（各状态条数、👎 最多的条目）、`kb_lessons.py apply ops.json`（手工增改，比如处理冲突：对保留的那条 `UPDATE` 带 `"resolve_conflict": true`，对另一条 `REMOVE`）。
+
+### 10. 测试与检查
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install "pytest>=8" "shellcheck-py>=0.10"
@@ -205,7 +230,7 @@ PATH=.venv/bin:$PATH PYTHON=.venv/bin/python bash tools/check.sh   # 语法 + sh
 ```
 
 - 测试只用合成数据：每个用例一个临时 HOME，模型调用（`kb_llm.chat`）和 QMD（PATH 里的桩脚本 / mock 的 MCP 请求）全部打桩，不连任何真实服务。
-- 覆盖：各来源解析与去重、会话 ID 撞车与旧出处沿用、脱敏、导出不误删、`--done` 闸门、提炼容错与失败减半、合并/重整 70% 门禁与提交冲突、写锁、index/log 维护、kb-recall、nightly 失败退出码、仓库里不残留个人路径。
+- 覆盖（另含语雀清洗与同步、检索评测、学习闭环的合并/升级/衰减/反馈、技能复盘与语雀摘要的闸门）：各来源解析与去重、会话 ID 撞车与旧出处沿用、脱敏、导出不误删、`--done` 闸门、提炼容错与失败减半、合并/重整 70% 门禁与提交冲突、写锁、index/log 维护、kb-recall、nightly 失败退出码、仓库里不残留个人路径。
 - 每个 PR 都由 CI 跑同一套检查（`.github/workflows/ci.yml`）。
 
 ---
