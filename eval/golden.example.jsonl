@@ -1,0 +1,3 @@
+{"q": "语雀文档怎么增量同步到知识库", "expect": ["wiki/concepts/语雀同步.md", "yuque/运维手册/部署/安装指南.md"], "collections": ["wiki", "yuque"]}
+{"q": "QMD 的 MCP 服务端口是多少", "expect": ["wiki/entities/qmd.md"]}
+{"q": "上次 nightly 失败是什么原因", "expect": ["tp-claude:abcdef12-1a2b3c:4"], "backend": "kb"}
