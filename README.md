@@ -49,12 +49,13 @@ hermes-kb-engine/
 │   ├── clean_yuque.py         # 语雀导出 → 检索用 Markdown（去 HTML、统一 frontmatter、加上下文行）
 │   └── qmd_embed_all.sh       # QMD 批量向量化（没算完以非 0 退出）
 ├── plugins/
-│   └── kb-recall/             # Hermes pre_llm_call 插件：现状页 + 知识库相关页注入
+│   └── kb-recall/             # Hermes pre_llm_call 插件：现状页 + 知识库/语雀相关页注入，按问题类型选集合，记命中日志
 ├── scripts/                   # 提炼、门禁、并发控制与维护
 │   ├── kb_config.py           # 统一配置（环境变量 > 配置文件 > 默认值）
 │   ├── kb_md.py               # frontmatter 读写小工具
 │   ├── kb_llm.py              # 唯一的模型调用口（OpenAI 兼容端点）
 │   ├── kb_models.py           # 模型是否就绪（没配好就让路）
+│   ├── kb_eval.py             # 检索评测（pass@k / MRR，退步报警）
 │   ├── kb_lock.py             # 知识库单写入锁
 │   ├── kb_stall_alert.py      # 积压停工报警
 │   ├── qmd_refresh.sh         # 每小时 QMD 增量刷新 + wiki Git 快照
@@ -64,6 +65,8 @@ hermes-kb-engine/
 │   ├── wiki_consolidate.py    # 碎页合并 / 大页重整 + 70% 门禁
 │   ├── wiki_consolidate_grok.py / wiki_consolidate_luna.py  # 旧的按额度分路入口（可选）
 │   └── wiki_housekeep.py      # index.md / _meta/map.md / log.md 轮换（不调模型）
+├── eval/
+│   └── golden.example.jsonl   # 检索评测集格式示例
 ├── docs/
 │   └── hermes-config.example.yaml  # Hermes mcp_servers 接 QMD 的配置片段
 ├── tests/                     # pytest 测试（只用合成数据，模型和 QMD 全部打桩）
@@ -165,7 +168,8 @@ python3 ~/.hermes/scripts/kb_models.py             # 显示是否就绪
 - **每 10 分钟**：运行 `wiki_merge_feed.py`，由 Hermes 执行语义原子并入并保留出处段 ID。
 - **每 30 分钟**：运行 `wiki_extract.py` 消化待处理切片；运行 `kb_stall_alert.py` 检查是否停工。
 - **每 4 小时**：运行 `wiki_consolidate.py` 进行碎页合并与大页四段式重整（70% 具体项保留门禁）。
-- **每日凌晨 03:00**：执行 `tools/nightly.sh`，完成会话同步、增量分块（`kb build`）、原始层导出、QMD 索引更新与 Git 自动备份；任何一步失败都会以非 0 退出并写入 `~/brain/.state/nightly.log`。
+- **每日凌晨 03:00**：执行 `tools/nightly.sh`，完成会话同步、语雀同步（配置了才跑）、增量分块（`kb build`）、原始层导出、QMD 索引更新与 Git 自动备份；任何一步失败都会以非 0 退出并写入 `~/brain/.state/nightly.log`。
+- **每周日 20:30**：运行 `kb_eval.py` 跑检索评测（见下文），退步时以退出码 2 结束。
 
 ### 6. 会话 ID 与旧出处兼容
 
@@ -186,7 +190,14 @@ python3 ~/.hermes/scripts/kb_models.py             # 显示是否就绪
 4. **接入 Hermes**：kb-recall 在语雀目录存在时自动查 `wiki,yuque`（命中附原文链接）；想让 Hermes 主动查，把 [`docs/hermes-config.example.yaml`](./docs/hermes-config.example.yaml) 里的 `mcp_servers` 片段加进 `~/.hermes/config.yaml`，然后 `/reload-mcp`。
 5. **出处格式**：`^[kb:yuque-doc:文档键:小节序号]`。文档键 = 语雀文档 id（Elog 导出带 frontmatter 时）或「知识库/目录/标题」的哈希；语雀里改了小节顺序，序号会变，写知识页时优先同时给出原文链接。
 
-### 8. 测试与检查
+### 8. 检索评测与命中日志
+
+- **kb-recall 选集合**：默认查 `wiki`（语雀目录存在时加 `yuque`）；问「上次/之前/当时/聊过」这类历史问题时再加原始对话集合 `raw`（`KB_RECALL_RAW=0` 关掉）。查询出错自动退回只查第一个集合。
+- **命中日志**：每次注入了相关页，就往 `~/brain/kb/recall_hits.jsonl`（`KB_RECALL_LOG`）追加一行：时间、平台、会话、消息哈希与前 60 字、查了哪些集合、注入了哪些页及分数；超过 5MB 轮换成 `.1`。学习闭环用它统计哪些页和教训「被用过」。
+- **评测集**：在 `~/brain/kb/eval/golden.jsonl` 写 20~50 条「问题 → 期望命中」（格式见 [`eval/golden.example.jsonl`](./eval/golden.example.jsonl)：文件写成 `集合/相对路径`，也可以写 kb 段 id 配 `"backend": "kb"`）。
+- **跑评测**：`python3 scripts/kb_eval.py [--backend qmd|kb]`，输出 pass@1 / pass@5 / pass@10 与 MRR、没命中的题和它们的前几名；结果写 `~/brain/kb/eval/last.json`，历史追加到 `history.jsonl`。pass@5 比上次同一评测集低超过 `KB_EVAL_TOLERANCE`（默认 0.05）记为退步、退出码 2。
+
+### 9. 测试与检查
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install "pytest>=8" "shellcheck-py>=0.10"

@@ -8,7 +8,7 @@
 - 查法：关键词 + 语义两路、关掉本地重排（rerank:false），检索仅需 1~2 秒。
 - 查不到、超时、出错都静默跳过，不影响对话。
 """
-import json, os, re, sys, time, urllib.request, logging
+import hashlib, json, os, re, sys, time, urllib.request, logging
 
 log = logging.getLogger("kb-recall")
 
@@ -22,16 +22,19 @@ def _cfg():
     try:
         import kb_config
         c = kb_config.load()
-        return c.mcp_url, c.wiki_dir, c.now_file, c.yuque_dir
+        return c.mcp_url, c.wiki_dir, c.now_file, c.yuque_dir, c.raw_dir, c.recall_log
     except Exception:
-        return (os.environ.get("KB_MCP_URL", "http://127.0.0.1:8181/mcp"),
-                os.path.expanduser(os.environ.get("KB_WIKI_DIR", "~/brain/wiki")),
-                os.path.expanduser(os.environ.get("KB_NOW_FILE", "~/brain/kb/now.md")),
-                os.path.expanduser(os.environ.get("KB_YUQUE_DIR", "~/brain/sources/yuque")))
+        e = lambda k, d: os.path.expanduser(os.environ.get(k, d))
+        return (os.environ.get("KB_MCP_URL", "http://127.0.0.1:8181/mcp"), e("KB_WIKI_DIR", "~/brain/wiki"),
+                e("KB_NOW_FILE", "~/brain/kb/now.md"), e("KB_YUQUE_DIR", "~/brain/sources/yuque"),
+                e("RAW_DIR", "~/brain/raw/conversations"), e("KB_RECALL_LOG", "~/brain/kb/recall_hits.jsonl"))
 
 
-MCP, WIKI, NOW, YUQUE = _cfg()
-ROOTS = {"wiki": WIKI, "yuque": YUQUE}          # QMD 集合名 -> 本地目录（命中结果的 file 形如「集合/相对路径」）
+MCP, WIKI, NOW, YUQUE, RAW, HITLOG = _cfg()
+ROOTS = {"wiki": WIKI, "yuque": YUQUE, "raw": RAW}   # QMD 集合名 -> 本地目录（命中结果的 file 形如「集合/相对路径」）
+HITLOG_MAX = 5 * 1024 * 1024
+# 问的是「以前聊过/当时怎么说」这类历史问题时，加查原始对话集合 raw（KB_RECALL_RAW=0 关掉）
+HISTORY_Q = re.compile(r"上次|之前|以前|那次|当时|聊过|说过|讨论过|提过|问过|记得|哪天|几号|昨天|前天|上周|上个月|历史记录|原话")
 PLATFORMS = {p.strip() for p in os.environ.get("KB_RECALL_PLATFORMS", "feishu,cli").split(",") if p.strip()}
 # 默认查 wiki；语雀目录存在时加上 yuque 集合（10-10）。查询出错时退回只查第一个集合（比如 yuque 集合还没在 QMD 里建）。
 COLLECTIONS = [c.strip() for c in (os.environ.get("KB_RECALL_COLLECTIONS")
@@ -59,13 +62,37 @@ def _post(payload, sid=None):
     return r.headers.get("mcp-session-id"), r.read().decode()
 
 
-def _search(text):
+def route(msg):
+    """按问题类型选集合：默认（操作/知识类）查 COLLECTIONS；历史类再加 raw。"""
+    cols = list(COLLECTIONS)
+    if HISTORY_Q.search(msg) and os.environ.get("KB_RECALL_RAW", "1") != "0" and "raw" not in cols:
+        cols.append("raw")
+    return cols
+
+
+def _search(text, collections=None):
+    cols = collections or COLLECTIONS
     try:
-        return _query(text, COLLECTIONS)
+        return _query(text, cols)
     except Exception:
-        if len(COLLECTIONS) < 2:
+        if len(cols) < 2:
             raise
-        return _query(text, COLLECTIONS[:1])
+        return _query(text, cols[:1])
+
+
+def _log_hit(platform, msg, cols, shown, kw):
+    """命中日志（JSONL）：只记消息的哈希和前 60 字，供学习闭环统计哪些页/教训被用过。写失败静默。"""
+    try:
+        os.makedirs(os.path.dirname(HITLOG), exist_ok=True)
+        if os.path.exists(HITLOG) and os.path.getsize(HITLOG) > HITLOG_MAX:
+            os.replace(HITLOG, HITLOG + ".1")
+        rec = {"ts": round(time.time(), 3), "platform": platform, "session": kw.get("session_id") or kw.get("session") or "",
+               "msg_sha1": hashlib.sha1(msg.encode()).hexdigest()[:16], "q": msg[:60], "collections": cols,
+               "hits": shown}
+        with open(HITLOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.info("kb-recall 命中日志写入失败（%s）", str(e)[:60])
 
 
 def _query(text, collections):
@@ -111,9 +138,10 @@ def recall(user_message="", platform=None, **kw):
     if len(msg) < 6:
         return status or None
     t = time.time()
-    lines = []
+    lines, shown = [], []
+    cols = route(msg)
     try:
-        hits = _search(msg[:300])
+        hits = _search(msg[:300], cols)
     except Exception as e:
         log.info("kb-recall 检索跳过（%s）", str(e)[:80])
         hits = []
@@ -123,7 +151,10 @@ def recall(user_message="", platform=None, **kw):
         if not rel or SKIP_FILES.search("/" + rel) or (h.get("score") or 0) < MIN_SCORE:
             continue
         title, summ, upd, url = _page(rel, ROOTS[coll])
-        if coll == "yuque":
+        shown.append({"file": f"{coll}/{rel}", "score": round(h.get("score") or 0, 3)})
+        if coll == "raw":
+            lines.append(f"- 〔原始对话〕{rel}：{summ}")
+        elif coll == "yuque":
             lines.append(f"- 〔语雀〕《{title or h.get('title') or rel}》（yuque/{rel}，语雀更新于 {upd or '不详'}"
                          + (f"，原文 {url}" if url else "") + f"）：{summ}")
         else:
@@ -131,6 +162,8 @@ def recall(user_message="", platform=None, **kw):
         if len(lines) >= TOP:
             break
     log.info("kb-recall 现状页%s，知识库 %d 条，%.1f 秒", "附上" if status else "未附", len(lines), time.time() - t)
+    if shown:
+        _log_hit(platform, msg, cols, shown, kw)
     kb = ("【你的知识库里和这句话可能相关的页面（自动检索，供参考）】\n" + "\n".join(lines) +
           "\n这些是从过去对话整理的笔记，记的是当时的情况：经验、做法和用户的要求可以照着用；"
           "机器装没装什么、服务和任务在不在跑、配置和授权是什么这类会变的状态，以现场查到的为准——笔记只告诉你去哪查，"
