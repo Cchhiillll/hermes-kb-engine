@@ -6,6 +6,7 @@
 密钥（OPENAI_API_KEY、YUQUE_TOKEN 等）**只从环境变量或 env 文件读**，配置文件里写了也不认，避免密钥进 git。
 
   python3 kb_config.py          打印当前生效的配置（不打印密钥）
+  python3 kb_config.py get KEY  只打印一个配置项（给 shell 脚本用；不能取密钥）
 """
 import os
 import sys
@@ -16,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 兜底
     tomllib = None
 
 # 不是对话的来源：这些段不进「读历史 / 提炼」队列，也不导出到 raw/conversations
-NON_CONVERSATION_SRCS = ("page",)
+NON_CONVERSATION_SRCS = ("page", "yuque-doc")
 SECRET_KEYS = {"api_key", "openai_api_key", "yuque_token", "token", "password"}
 
 # 键 -> (环境变量名列表（前面的优先，后面的是兼容旧名）, 默认值)
@@ -47,6 +48,11 @@ _SPEC = {
     "model": (["KB_MODEL"], ""),
     "provider": (["KB_PROVIDER"], "custom"),
     "base_url": (["OPENAI_BASE_URL"], ""),
+    # 语雀：导出工具（yuque-exporter / elog / 空 = 不同步）、导出原样目录、清洗后供检索的目录
+    "yuque_tool": (["KB_YUQUE_TOOL"], ""),
+    "yuque_export_dir": (["KB_YUQUE_EXPORT_DIR"], "{brain_dir}/sources/yuque-export"),
+    "yuque_dir": (["KB_YUQUE_DIR"], "{brain_dir}/sources/yuque"),
+    "yuque_base_url": (["KB_YUQUE_BASE_URL"], ""),
 }
 
 
@@ -123,6 +129,11 @@ def non_conversation_sql(col="src"):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "get":      # shell 脚本取单个配置项：kb_config.py get yuque_dir
+        v = load().get(sys.argv[2])
+        if v is None:
+            sys.exit(f"没有这个配置项：{sys.argv[2]}")
+        print(v); sys.exit(0)
     c = load()
     print(f"配置文件：{_config_file()}（{'存在' if os.path.exists(_config_file()) else '不存在'}）")
     for k in sorted(c):

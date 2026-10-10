@@ -42,7 +42,7 @@ DSH_MARK = (os.path.basename(ROOT.rstrip("/")).replace(" ", "~0020") + "-") if R
 _ORDER = ("claude", "dsh", "codex", "agy", "openclaw", "hermes", "zcode", "grok")
 def rank(src):
     """收录顺序：页面最先，其余按来源类型（同类内本机在前）。重复片段只保留先收的那份。"""
-    if src == "page": return -1
+    if src in kb_config.NON_CONVERSATION_SRCS: return -1     # 知识页、语雀文档先收
     pre, _, fam = src.partition("-")
     return (_ORDER.index(fam) if fam in _ORDER else len(_ORDER)) * 2 + (0 if pre == REMOTE else 1)
 REPLY_MAX = 12000
@@ -336,6 +336,28 @@ def ev_page(f, topic):
             yield ts, "user", f"【整理页】{topic}｜{title}"
             yield ts, "reply", body
 
+def ev_yuque(f):
+    """语雀文档（clean_yuque.py 的输出）：按 ## 小节切，每节一段；时间取文档的 updated_at。"""
+    from kb_md import split_frontmatter
+    fm, body = split_frontmatter(open(f, encoding="utf-8", errors="ignore").read())
+    ts = iso2ep(fm.get("updated_at")) or os.path.getmtime(f)
+    title, book = fm.get("title") or _stem(f), fm.get("book") or ""
+    for n, sec in enumerate(re.split(r"(?m)^(?=## )", body)):
+        if not sec.strip(): continue
+        head = sec.splitlines()[0].lstrip("#> ").strip() if sec.startswith("## ") else "概述"
+        text = "\n".join(sec.splitlines()[1:] if sec.startswith("## ") else sec.splitlines()).strip()
+        if text:
+            yield ts, "user", f"【语雀】{book}｜{title}｜{head}"
+            yield ts, "reply", text
+
+def yuque_docs():
+    """(会话 ID, 知识库名, 文件) —— 会话 ID 用 clean_yuque 写的 doc_key（语雀文档 id，没有就是路径哈希），出处形如 ^[kb:yuque-doc:doc_key:小节序号]。"""
+    from kb_md import split_frontmatter
+    for f in sorted(glob.glob(f"{CFG.yuque_dir}/**/*.md", recursive=True)):
+        fm, _ = split_frontmatter(open(f, encoding="utf-8", errors="ignore").read(2000))
+        key = fm.get("doc_key") or "h" + hashlib.sha1(os.path.relpath(f, CFG.yuque_dir).encode()).hexdigest()[:10]
+        yield sid(key), fm.get("book") or "", f
+
 def _stem(f):
     return os.path.basename(f).split(".")[0]
 
@@ -430,6 +452,10 @@ def sources():
         topic = os.path.basename(f)[:-3]
         yield "page", topic, topic, f, os.path.getmtime(f), lambda f=f, topic=topic: ev_page(f, topic)
 
+    # 11. 语雀文档（tools/sync_yuque.sh 同步 + kb/clean_yuque.py 清洗后的目录）
+    for session, book, f in yuque_docs():
+        yield "yuque-doc", session, book, f, os.path.getmtime(f), lambda f=f: ev_yuque(f)
+
 # ---------------- 一问一答切片 ----------------
 def norm(s): return re.sub(r"\s+", " ", s or "").strip()
 
@@ -513,8 +539,12 @@ def build(full=False):
             added += 1
         c.execute("insert or replace into files values(?,?,?,?)", (key, src, session, mtime))
         if sess % 50 == 0: c.commit()
+    gone = 0
+    for key, src, session in c.execute("select key, src, session from files where src='yuque-doc'").fetchall():
+        if not os.path.exists(key):                   # 语雀那边删掉/改名的文档：片段一并删掉（对话来源只增不删）
+            drop_session(c, src, session); c.execute("delete from files where key=?", (key,)); gone += 1
     c.commit()
-    print(f"收录完成：处理 {sess} 个会话，新增片段 {added}，重复跳过 {skipped}")
+    print(f"收录完成：处理 {sess} 个会话，新增片段 {added}，重复跳过 {skipped}" + (f"，移除已删除的语雀文档 {gone} 篇" if gone else ""))
 
 # ---------------- 检索 ----------------
 def _snip(text, qt, n):
