@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""知识库提炼与并入模型路由。
+"""知识库提炼与并入的模型选择（10-10 起：单一 OpenAI 兼容端点）。
 
-支持通过环境变量灵活指定模型与提供商：
-  export KB_MODEL="grok-4.6"          # 模型名称
-  export KB_PROVIDER="custom"         # 提供商 / Provider
-  export OPENAI_BASE_URL="..."        # 自定义网关地址
-  export OPENAI_API_KEY="..."         # 认证密钥
+  export KB_MODEL="gemini-..."               # 模型名
+  export OPENAI_BASE_URL="https://中转/v1"    # 端点
+  export OPENAI_API_KEY="..."                # 密钥（只放环境变量或 ~/.hermes/.env）
 
-若未显式指定环境变量，支持基于本地配置或探测命令自适应挑可用模型。
+pick() 返回 (名字, 模型, provider, 说明)；没配好时名字为 None，调用方据此让路（不领活、不叫醒模型）。
+旧的 Grok / luna / Gemini 额度探测保留为可选：KB_LEGACY_ROUTING=1 才启用（依赖 Hermes 内部模块和非官方接口，不推荐）。
 """
-import datetime as dt, json, os, subprocess, sys, time
+import json, os, subprocess, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+import kb_config
 
 GROK_STOP, LUNA_5H, LUNA_WEEK = 80, 60, 80
-MODELS = {
+LEGACY_MODELS = {
     "grok": ("grok-4.6", "xai-oauth"),
     "luna": ("gpt-6-luna", "modelversecpa"),
     "gemini": ("gemini-3.8-flash-high", "modelversecpa"),
-    "default": ("gpt-4o-mini", "custom"),
 }
 
 
@@ -42,42 +42,37 @@ def luna():
 
 
 def gemini():
-    # 优先支持环境变量指定的健康探测脚本或接口
+    """10-10：没有探针时算「不知道」而不是「能用」（原来直接返回能用，让路逻辑形同虚设）。"""
     probe_cmd = os.environ.get("GEMINI_STATUS_CMD")
     if not probe_cmd:
-        # 无自定义探针时，若配置了 Hermes 默认环境则直接视为可用
-        return True, "默认启用"
+        return False, "没有配置 GEMINI_STATUS_CMD 探针，状态未知"
     try:
         r = subprocess.run(probe_cmd, shell=True, capture_output=True, text=True, timeout=15)
-        s = json.loads(r.stdout)
-        n = s.get("gemini_usable", 0)
+        n = json.loads(r.stdout).get("gemini_usable", 0)
         return n > 0, f"可用号 {n} 个"
     except Exception as e:
         return False, f"探针读取失败（{str(e)[:40]}）"
 
 
 def pick():
-    # 1. 优先使用环境变量显式指定的模型
-    env_m = os.environ.get("KB_MODEL")
-    env_p = os.environ.get("KB_PROVIDER", "custom")
-    if env_m:
-        return ("custom", env_m, env_p, f"使用环境变量指定模型: {env_m} (provider: {env_p})")
-
-    # 2. 依次探测备用模型
-    notes = []
-    for name, fn in (("gemini", gemini), ("grok", grok), ("luna", luna)):
-        try:
-            ok, why = fn()
-        except Exception as e:
-            ok, why = False, f"出错（{str(e)[:40]}）"
-        notes.append(f"{name}：{why}")
-        if ok and name in MODELS:
-            return (name, *MODELS[name], "；".join(notes))
-
-    # 3. 兜底默认模型
-    return ("default", *MODELS["default"], f"回退至默认配置（{'；'.join(notes)}）")
+    cfg = kb_config.load()
+    base = cfg.base_url or kb_config.hermes_env().get("OPENAI_BASE_URL", "")
+    if cfg.model and base:
+        return ("custom", cfg.model, cfg.provider, f"使用 KB_MODEL={cfg.model}（OpenAI 兼容端点）")
+    notes = [f"KB_MODEL{'已' if cfg.model else '未'}设置、OPENAI_BASE_URL{'已' if base else '未'}设置"]
+    if os.environ.get("KB_LEGACY_ROUTING") == "1":
+        for name, fn in (("gemini", gemini), ("grok", grok), ("luna", luna)):
+            try:
+                ok, why = fn()
+            except Exception as e:
+                ok, why = False, f"出错（{str(e)[:40]}）"
+            notes.append(f"{name}：{why}")
+            if ok:
+                return (name, *LEGACY_MODELS[name], "；".join(notes))
+    return (None, None, None, "；".join(notes))
 
 
 if __name__ == "__main__":
     name, model, provider, notes = pick()
     print(f"选中：{name or '未就绪'}（模型: {model}, provider: {provider}, 状态: {notes}）")
+    sys.exit(0 if name else 1)
