@@ -7,13 +7,14 @@
   --dry  只打印判断结果，不发卡片
 """
 import json, os, sqlite3, sys, time
-sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+import kb_config
 import wiki_consolidate as w
 import wiki_feed as wf
 import kb_lock
 
 STALL_HOURS, REPEAT_HOURS = 3, 12
-STATE = os.path.expanduser("~/brain/kb/.stall_alert.json")
+STATE = os.path.join(os.path.dirname(kb_config.load().db), ".stall_alert.json")
 now = time.time()
 c = w.conn()
 k = wf.conn()
@@ -76,6 +77,6 @@ try:
         user_action="把这张卡转给 Claude Code，或在会话里说一句「知识库停了」。",
         template="red", note="赫尔墨斯 · 知识库停工报警")
 except Exception as e:
-    print(f"⛔ 知识库停了 {stall_h:.0f} 小时: {msg} (通知分发跳过: {e})")
+    print(f"⛔ 知识库停了 {stall_h:.0f} 小时: {msg} (飞书卡片未发出：没有 feishu_card 模块或发送失败：{e})")
 st["alerted"] = now
 json.dump(st, open(STATE, "w"))

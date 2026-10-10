@@ -9,9 +9,11 @@ log.md 写着「超过 500 条就轮换」但没人做，长到 1.2MB。
   - log.md：只留最近 150 条，更早的追加进 log-2026.md。
 只在内容有变化时写文件。
 """
-import fcntl, glob, os, re, time
+import fcntl, glob, os, re, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kb_config
 
-W = os.path.expanduser("~/brain/wiki")
+W = kb_config.load().wiki_dir
 KEEP_LAST = 150                     # log.md 只留最近 150 条（10-01~04 三天就写了 887 条、1.2MB）
 SECTIONS = [("projects", "Projects", "每个项目一页：是什么、现状、规则、决定、做法与排障、历史"),
             ("entities", "Entities", "机器、服务/容器、网站、渠道和账号、工具/agent，各自的做法与排障也在页里"),
