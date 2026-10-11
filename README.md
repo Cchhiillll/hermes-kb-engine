@@ -74,7 +74,6 @@ hermes-kb-engine/
 │   └── hermes-config.example.yaml  # Hermes mcp_servers 接 QMD 的配置片段
 ├── tests/                     # pytest 测试（只用合成数据，模型和 QMD 全部打桩）
 ├── pyproject.toml             # pytest 配置与测试依赖
-├── .github/workflows/ci.yml   # CI：语法检查 + shellcheck + pytest（Python 3.11~3.13）
 ├── tools/
 │   ├── check.sh               # 本地 / CI 统一检查入口
 │   ├── nightly.sh             # 夜间流水线入口（任一步失败则非 0 退出）
@@ -231,7 +230,7 @@ PATH=.venv/bin:$PATH PYTHON=.venv/bin/python bash tools/check.sh   # 语法 + sh
 
 - 测试只用合成数据：每个用例一个临时 HOME，模型调用（`kb_llm.chat`）和 QMD（PATH 里的桩脚本 / mock 的 MCP 请求）全部打桩，不连任何真实服务。
 - 覆盖（另含语雀清洗与同步、检索评测、学习闭环的合并/升级/衰减/反馈、技能复盘与语雀摘要的闸门）：各来源解析与去重、会话 ID 撞车与旧出处沿用、脱敏、导出不误删、`--done` 闸门、提炼容错与失败减半、合并/重整 70% 门禁与提交冲突、写锁、index/log 维护、kb-recall、nightly 失败退出码、仓库里不残留个人路径。
-- 每个 PR 都由 CI 跑同一套检查（`.github/workflows/ci.yml`）。
+- 仓库暂未启用 GitHub Actions；合并前请在本地运行 `tools/check.sh`。
 
 ---
 
