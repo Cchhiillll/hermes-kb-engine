@@ -238,6 +238,26 @@ confidence: high
 - **文档键**：有语雀文档 id 就用 id，没有（yuque-exporter 导出不带 frontmatter）就用「知识库/目录/标题」的哈希，保证出处稳定。
 - **召回**：kb-recall 在语雀目录存在时默认查 `wiki,yuque` 两个集合（`KB_RECALL_COLLECTIONS` 可改），查询出错自动退回只查 `wiki`；语雀命中会附上原文链接和语雀更新日期。
 
+### 6. 学习闭环（Learning Loop，10-10）
+
+```mermaid
+flowchart LR
+    C[对话片段] -->|wiki_extract 提炼| O["教训提议<br/>ADD / UPDATE / REMOVE"]
+    O -->|kb_lessons 确定性合并<br/>去重·冲突·必须有出处| P[(lessons/_playbook.json)]
+    P -->|渲染| W["wiki/lessons/领域.md<br/>稳定 / 草稿 / 历史"]
+    W -->|QMD 检索| R[kb-recall 注入最相关 1~3 条]
+    R -->|命中日志 recall_hits.jsonl| F[maintain：看用户下一句<br/>纠正 👎 / 肯定 👍]
+    F --> P
+    P -->|升级 / 衰减| P
+    E[kb_eval 检索评测] -.退步时暂停升级.-> P
+    S[skill_review_feed<br/>昨天顺利的多步操作] -->|Hermes skill_manage<br/>write_approval 待审| K[~/.hermes/skills]
+```
+
+- **可复现**：模型只提议操作，合并、升级、衰减都是脚本里的固定规则（同样的输入得到同样的手册），测试覆盖每条规则。
+- **防「错话洗成知识」**：只有 agent 自己说法的教训永远是草稿（注入时标「未核实」）；升级需要用户确认、跨会话的用户/实测依据，或多次被判有用且从未被判有害。
+- **会忘**：被纠正多于被肯定的降级 / 退役，长期没用到的草稿退役，退役条目留在「历史」里可追溯。
+- **技能和记忆不自动生效**：技能复盘要求 Hermes 的 `skills.write_approval` 和 `memory.write_approval` 开启，所有写入进待审区由用户确认。
+
 ---
 
 ## 四、 核心防护门禁（Fail-Closed 规则集）
@@ -294,7 +314,8 @@ confidence: high
 - `wiki_extract.py`：低成本纯文本无工具提炼脚本；
 - `wiki_merge_feed.py`：排他写锁受控入库脚本；
 - `wiki_consolidate.py`：防膨胀页面合并重整门禁脚本；
-- `kb_lock.py`：基于文件锁与超时的单写入并发控制器。
+- `kb_lock.py`：基于文件锁与超时的单写入并发控制器；
+- `kb_lessons.py` / `skill_review_feed.py` / `yuque_digest.py`：学习闭环与语雀交叉引用（可选）。
 
 ### 4. 接入定时调度（Hermes Cron 或系统 Crontab）
 - `0 3 * * *`：执行夜间多端会话拉取与 `kb build`；

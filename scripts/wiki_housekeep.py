@@ -18,7 +18,8 @@ KEEP_LAST = 150                     # log.md 只留最近 150 条（10-01~04 三
 SECTIONS = [("projects", "Projects", "每个项目一页：是什么、现状、规则、决定、做法与排障、历史"),
             ("entities", "Entities", "机器、服务/容器、网站、渠道和账号、工具/agent，各自的做法与排障也在页里"),
             ("concepts", "Concepts", "跨项目通用的方法和经验"),
-            ("queries", "Queries", "值得留下的问答结论")]
+            ("queries", "Queries", "值得留下的问答结论"),
+            ("lessons", "Lessons", "经验教训（学习闭环自动维护：稳定 / 草稿 / 历史）")]
 
 
 def one_liner(f):
